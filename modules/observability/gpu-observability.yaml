@@ -101,6 +101,9 @@ Resources:
             Principal:
               Service: grafana.amazonaws.com
             Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
       Policies:
         - PolicyName: PrometheusAccess
           PolicyDocument:
@@ -112,6 +115,9 @@ Resources:
                   - aps:GetLabels
                   - aps:GetSeries
                   - aps:GetMetricMetadata
+                Resource: !GetAtt PrometheusWorkspace.Arn
+              - Effect: Allow
+                Action:
                   - aps:ListWorkspaces
                   - aps:DescribeWorkspace
                 Resource: "*"

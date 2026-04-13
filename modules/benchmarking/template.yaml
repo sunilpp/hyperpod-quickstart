@@ -116,6 +116,15 @@ Resources:
               - Effect: Allow
                 Action:
                   - ssm:SendCommand
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:document/${ResourceNamePrefix}-benchmark"
+                  - !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}::document/AWS-RunShellScript"
+                  - !Sub "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/*"
+                Condition:
+                  StringEquals:
+                    ssm:resourceTag/ManagedBy: CloudFormation
+              - Effect: Allow
+                Action:
                   - ssm:GetCommandInvocation
                 Resource: "*"
               - Effect: Allow

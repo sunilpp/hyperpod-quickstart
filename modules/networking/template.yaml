@@ -240,7 +240,9 @@ Resources:
                   - logs:PutLogEvents
                   - logs:DescribeLogGroups
                   - logs:DescribeLogStreams
-                Resource: !GetAtt FlowLogGroup.Arn
+                Resource:
+                  - !GetAtt FlowLogGroup.Arn
+                  - !Sub "${FlowLogGroup.Arn}:*"
 
   VPCFlowLog:
     Type: AWS::EC2::FlowLog

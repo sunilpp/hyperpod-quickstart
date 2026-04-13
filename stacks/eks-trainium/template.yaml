@@ -135,6 +135,7 @@ Resources:
         NatGatewayId: !GetAtt NetworkingStack.Outputs.NatGatewayId
         SecurityGroupId: !GetAtt SecurityStack.Outputs.SecurityGroupId
         KubernetesVersion: !Ref KubernetesVersion
+        HyperPodExecutionRoleArn: !GetAtt IAMStack.Outputs.RoleArn
 
   EKSAddonsStack:
     Type: AWS::CloudFormation::Stack
