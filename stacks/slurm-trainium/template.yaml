@@ -54,6 +54,18 @@ Parameters:
     Type: String
     Default: ml.m5.2xlarge
 
+  SSHPublicKey:
+    Type: String
+    Default: ""
+    Description: >
+      Your SSH public key (e.g., ssh-rsa AAAAB3Nz...). Added to authorized_keys
+      on all nodes. Leave empty to use SSM Session Manager only.
+
+  ExistingIAMRoleArn:
+    Type: String
+    Default: ""
+    Description: ARN of an existing IAM role. Leave empty to create a new one.
+
   EnableObservability:
     Type: String
     Default: "true"
@@ -89,6 +101,7 @@ Mappings:
       EBSVolume: "1000"
 
 Conditions:
+  HasSSHKey: !Not [!Equals [!Ref SSHPublicKey, ""]]
   ObservabilityEnabled: !Equals [!Ref EnableObservability, "true"]
   ValidationEnabled: !Equals [!Ref EnableValidation, "true"]
   BenchmarksEnabled: !Equals [!Ref RunBenchmarks, "true"]
@@ -134,10 +147,22 @@ Resources:
       Parameters:
         ResourceNamePrefix: !Ref ClusterName
         LifecycleScriptsBucket: !GetAtt S3Stack.Outputs.BucketName
+        ExistingRoleArn: !Ref ExistingIAMRoleArn
         PrometheusWorkspaceArn: !If
           - ObservabilityEnabled
           - !GetAtt ObservabilityStack.Outputs.PrometheusWorkspaceArn
           - ""
+
+  SSHKeyParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/hyperpod/${ClusterName}/ssh-public-key"
+      Type: String
+      Value: !If
+        - HasSSHKey
+        - !Ref SSHPublicKey
+        - "none"
+      Description: User SSH public key for cluster node access
 
   HyperPodStack:
     Type: AWS::CloudFormation::Stack

@@ -9,5 +9,6 @@
         }
     ],
     "fsx_dns_name": "PLACEHOLDER_FSX_DNS",
-    "fsx_mountname": "PLACEHOLDER_FSX_MOUNT"
+    "fsx_mountname": "PLACEHOLDER_FSX_MOUNT",
+    "ssh_public_key": ""
 }

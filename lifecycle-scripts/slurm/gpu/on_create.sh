@@ -132,15 +132,47 @@ fi
 # Configure SSH between nodes
 # -------------------------------------------------------------------------
 log "--- Configuring SSH ---"
+
+# Set up SSH for root (inter-node communication for MPI/NCCL)
 SSH_DIR="/root/.ssh"
 mkdir -p "$SSH_DIR"
 chmod 700 "$SSH_DIR"
 
-# Generate SSH key if not present
+# Generate inter-node SSH key if not present
 if [[ ! -f "$SSH_DIR/id_rsa" ]]; then
     ssh-keygen -t rsa -b 4096 -f "$SSH_DIR/id_rsa" -N "" -q
     cat "$SSH_DIR/id_rsa.pub" >> "$SSH_DIR/authorized_keys"
     chmod 600 "$SSH_DIR/authorized_keys"
+fi
+
+# If user provided their SSH public key (stored in SSM by CloudFormation),
+# add it to authorized_keys so they can SSH directly to cluster nodes
+CLUSTER_NAME=$(jq -r '.ClusterName // empty' /opt/ml/config/resource_config.json 2>/dev/null || echo "")
+if [[ -n "$CLUSTER_NAME" ]]; then
+    USER_SSH_KEY=$(aws ssm get-parameter \
+        --name "/hyperpod/${CLUSTER_NAME}/ssh-public-key" \
+        --query "Parameter.Value" --output text 2>/dev/null || echo "none")
+else
+    # Fallback: try provisioning_parameters.json
+    USER_SSH_KEY=$(jq -r '.ssh_public_key // "none"' "$PROVISIONING_PARAMS" 2>/dev/null || echo "none")
+fi
+
+if [[ -n "$USER_SSH_KEY" && "$USER_SSH_KEY" != "none" ]]; then
+    log "Adding user-provided SSH public key to authorized_keys"
+    echo "$USER_SSH_KEY" >> "$SSH_DIR/authorized_keys"
+
+    # Also add to ubuntu user if it exists (default HyperPod user)
+    if id ubuntu &>/dev/null; then
+        UBUNTU_SSH="/home/ubuntu/.ssh"
+        mkdir -p "$UBUNTU_SSH"
+        echo "$USER_SSH_KEY" >> "$UBUNTU_SSH/authorized_keys"
+        chmod 700 "$UBUNTU_SSH"
+        chmod 600 "$UBUNTU_SSH/authorized_keys"
+        chown -R ubuntu:ubuntu "$UBUNTU_SSH"
+        log "SSH key also added for ubuntu user"
+    fi
+else
+    log "No user SSH key provided — use SSM Session Manager to access nodes"
 fi
 
 # Configure SSH to skip host key checking within cluster

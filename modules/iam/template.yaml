@@ -19,12 +19,21 @@ Parameters:
     Default: ""
     Description: ARN of the AMP workspace. Leave empty to skip Prometheus permissions.
 
+  ExistingRoleArn:
+    Type: String
+    Default: ""
+    Description: >
+      ARN of an existing IAM role to use instead of creating a new one.
+      Leave empty to create a new role automatically.
+
 Conditions:
   HasPrometheusWorkspace: !Not [!Equals [!Ref PrometheusWorkspaceArn, ""]]
+  CreateNewRole: !Equals [!Ref ExistingRoleArn, ""]
 
 Resources:
   HyperPodExecutionRole:
     Type: AWS::IAM::Role
+    Condition: CreateNewRole
     Properties:
       RoleName: !Sub "${ResourceNamePrefix}-execution-role"
       Path: /hyperpod/
@@ -37,6 +46,8 @@ Resources:
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSageMakerClusterInstanceRolePolicy"
+        # SSM Session Manager — required for SSH access to cluster nodes
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
       Policies:
         # S3 access for lifecycle scripts
         - PolicyName: !Sub "${ResourceNamePrefix}-lifecycle-s3"
@@ -136,8 +147,14 @@ Resources:
 Outputs:
   RoleArn:
     Description: ARN of the HyperPod execution role
-    Value: !GetAtt HyperPodExecutionRole.Arn
+    Value: !If
+      - CreateNewRole
+      - !GetAtt HyperPodExecutionRole.Arn
+      - !Ref ExistingRoleArn
 
   RoleName:
     Description: Name of the HyperPod execution role
-    Value: !Ref HyperPodExecutionRole
+    Value: !If
+      - CreateNewRole
+      - !Ref HyperPodExecutionRole
+      - !Select [1, !Split ["/", !Ref ExistingRoleArn]]

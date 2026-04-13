@@ -15,10 +15,15 @@ Metadata:
           - ClusterSize
           - AvailabilityZoneId
       - Label:
+          default: SSH Access
+        Parameters:
+          - SSHPublicKey
+      - Label:
           default: Advanced - Instance Configuration
         Parameters:
           - WorkerInstanceType
           - ControllerInstanceType
+          - ExistingIAMRoleArn
       - Label:
           default: Features
         Parameters:
@@ -63,6 +68,21 @@ Parameters:
     Default: ml.m5.2xlarge
     Description: Instance type for Slurm controller (head) node.
 
+  SSHPublicKey:
+    Type: String
+    Default: ""
+    Description: >
+      Your SSH public key (e.g., ssh-rsa AAAAB3Nz...). If provided, it will be
+      added to authorized_keys on all cluster nodes so you can SSH directly.
+      Leave empty to use SSM Session Manager only.
+
+  ExistingIAMRoleArn:
+    Type: String
+    Default: ""
+    Description: >
+      ARN of an existing IAM role for HyperPod. Leave empty to create a new one.
+      Use this if your organization requires pre-approved IAM roles.
+
   EnableObservability:
     Type: String
     Default: "true"
@@ -104,6 +124,7 @@ Mappings:
       EBSVolume: "1000"
 
 Conditions:
+  HasSSHKey: !Not [!Equals [!Ref SSHPublicKey, ""]]
   ObservabilityEnabled: !Equals [!Ref EnableObservability, "true"]
   ValidationEnabled: !Equals [!Ref EnableValidation, "true"]
   BenchmarksEnabled: !Equals [!Ref RunBenchmarks, "true"]
@@ -165,10 +186,25 @@ Resources:
       Parameters:
         ResourceNamePrefix: !Ref ClusterName
         LifecycleScriptsBucket: !GetAtt S3Stack.Outputs.BucketName
+        ExistingRoleArn: !Ref ExistingIAMRoleArn
         PrometheusWorkspaceArn: !If
           - ObservabilityEnabled
           - !GetAtt ObservabilityStack.Outputs.PrometheusWorkspaceArn
           - ""
+
+  # =========================================================================
+  # SSH Key (stored in SSM for lifecycle scripts to retrieve)
+  # =========================================================================
+  SSHKeyParameter:
+    Type: AWS::SSM::Parameter
+    Properties:
+      Name: !Sub "/hyperpod/${ClusterName}/ssh-public-key"
+      Type: String
+      Value: !If
+        - HasSSHKey
+        - !Ref SSHPublicKey
+        - "none"
+      Description: User SSH public key for cluster node access
 
   # =========================================================================
   # HyperPod Cluster
