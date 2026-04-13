@@ -1,0 +1,143 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Shared IAM roles for SageMaker HyperPod Quick Start stacks.
+  Creates the SageMaker execution role with least-privilege policies for
+  S3 lifecycle scripts, FSx, CloudWatch, SSM, and optional Prometheus.
+
+Parameters:
+  ResourceNamePrefix:
+    Type: String
+    Default: hyperpod
+    Description: Prefix applied to resource names.
+
+  LifecycleScriptsBucket:
+    Type: String
+    Description: Name of the S3 bucket that stores lifecycle scripts.
+
+  PrometheusWorkspaceArn:
+    Type: String
+    Default: ""
+    Description: ARN of the AMP workspace. Leave empty to skip Prometheus permissions.
+
+Conditions:
+  HasPrometheusWorkspace: !Not [!Equals [!Ref PrometheusWorkspaceArn, ""]]
+
+Resources:
+  HyperPodExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourceNamePrefix}-execution-role"
+      Path: /hyperpod/
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: sagemaker.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSageMakerClusterInstanceRolePolicy"
+      Policies:
+        # S3 access for lifecycle scripts
+        - PolicyName: !Sub "${ResourceNamePrefix}-lifecycle-s3"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${LifecycleScriptsBucket}/*"
+              - Effect: Allow
+                Action:
+                  - s3:ListBucket
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${LifecycleScriptsBucket}"
+
+        # FSx filesystem discovery
+        - PolicyName: !Sub "${ResourceNamePrefix}-fsx"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - fsx:DescribeFileSystems
+                  - fsx:DescribeFileSystemAliases
+                Resource: "*"
+
+        # CloudWatch Logs for lifecycle scripts and cluster logs
+        - PolicyName: !Sub "${ResourceNamePrefix}-cloudwatch-logs"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/sagemaker/*"
+
+        # EC2 describe for network and instance discovery
+        - PolicyName: !Sub "${ResourceNamePrefix}-ec2-describe"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeVpcs
+                Resource: "*"
+
+        # SSM for cluster configuration parameters
+        - PolicyName: !Sub "${ResourceNamePrefix}-ssm"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:PutParameter
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/hyperpod/*"
+
+        # CloudWatch metrics for custom monitoring
+        - PolicyName: !Sub "${ResourceNamePrefix}-cloudwatch-metrics"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - cloudwatch:PutMetricData
+                Resource: "*"
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: !Sub "/aws/sagemaker/${ResourceNamePrefix}"
+
+        # Prometheus remote write (conditional)
+        - !If
+          - HasPrometheusWorkspace
+          - PolicyName: !Sub "${ResourceNamePrefix}-prometheus"
+            PolicyDocument:
+              Version: "2012-10-17"
+              Statement:
+                - Effect: Allow
+                  Action:
+                    - aps:RemoteWrite
+                  Resource: !Ref PrometheusWorkspaceArn
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Project
+          Value: !Ref ResourceNamePrefix
+        - Key: ManagedBy
+          Value: CloudFormation
+
+Outputs:
+  RoleArn:
+    Description: ARN of the HyperPod execution role
+    Value: !GetAtt HyperPodExecutionRole.Arn
+
+  RoleName:
+    Description: Name of the HyperPod execution role
+    Value: !Ref HyperPodExecutionRole

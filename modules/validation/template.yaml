@@ -1,0 +1,215 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Post-deployment validation for HyperPod clusters.
+  Runs automated health checks via a Lambda-backed custom resource
+  to verify cluster status, subnet configuration, and security group rules.
+
+Parameters:
+  ResourceNamePrefix:
+    Type: String
+    Default: hyperpod
+
+  ClusterName:
+    Type: String
+  ClusterArn:
+    Type: String
+  SubnetId:
+    Type: String
+  SecurityGroupId:
+    Type: String
+  ExpectedWorkerCount:
+    Type: Number
+    Default: 2
+
+
+Resources:
+
+  # -------------------------------------------------------------------------
+  # Validation Lambda IAM Role
+  # -------------------------------------------------------------------------
+  ValidationLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourceNamePrefix}-validation-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+        - PolicyName: ValidationPermissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sagemaker:DescribeCluster
+                  - sagemaker:ListClusterNodes
+                Resource: !Ref ClusterArn
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeSubnets
+                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeNetworkInterfaces
+                Resource: "*"
+
+  # -------------------------------------------------------------------------
+  # Validation Lambda Function
+  # -------------------------------------------------------------------------
+  ValidationFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ResourceNamePrefix}-cluster-validation"
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 300
+      MemorySize: 256
+      Role: !GetAtt ValidationLambdaRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import logging
+          import boto3
+          import cfnresponse
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          sm = boto3.client('sagemaker')
+          ec2 = boto3.client('ec2')
+
+
+          def check_cluster_status(cluster_name):
+              """Verify cluster is InService."""
+              try:
+                  resp = sm.describe_cluster(ClusterName=cluster_name)
+                  status = resp.get('ClusterStatus', 'Unknown')
+                  logger.info(f"Cluster status: {status}")
+                  return status == 'InService', status
+              except Exception as e:
+                  logger.error(f"DescribeCluster failed: {e}")
+                  return False, str(e)
+
+
+          def check_cluster_nodes(cluster_name, expected_count):
+              """Verify all nodes are Running and count matches."""
+              try:
+                  resp = sm.list_cluster_nodes(ClusterName=cluster_name)
+                  nodes = resp.get('ClusterNodeSummaries', [])
+                  total = len(nodes)
+                  running = sum(1 for n in nodes if n.get('InstanceStatus', {}).get('Status') == 'Running')
+                  logger.info(f"Nodes: {running}/{total} running, expected {expected_count}")
+                  return running >= expected_count, f"{running}/{total}"
+              except Exception as e:
+                  logger.error(f"ListClusterNodes failed: {e}")
+                  return False, str(e)
+
+
+          def check_subnet_private(subnet_id):
+              """Verify subnet does not map public IPs."""
+              try:
+                  resp = ec2.describe_subnets(SubnetIds=[subnet_id])
+                  is_public = resp['Subnets'][0].get('MapPublicIpOnLaunch', False)
+                  result = not is_public
+                  logger.info(f"Subnet {subnet_id} private: {result}")
+                  return result, "Private" if result else "PUBLIC (not recommended)"
+              except Exception as e:
+                  logger.error(f"DescribeSubnets failed: {e}")
+                  return False, str(e)
+
+
+          def check_security_group(sg_id):
+              """Verify self-referencing ingress rule exists (required for EFA)."""
+              try:
+                  resp = ec2.describe_security_groups(GroupIds=[sg_id])
+                  sg = resp['SecurityGroups'][0]
+                  for rule in sg.get('IpPermissions', []):
+                      for pair in rule.get('UserIdGroupPairs', []):
+                          if pair.get('GroupId') == sg_id:
+                              logger.info(f"SG {sg_id} has self-referencing ingress")
+                              return True, "Self-ref ingress found"
+                  logger.warning(f"SG {sg_id} missing self-referencing ingress")
+                  return False, "Missing self-referencing ingress (EFA may fail)"
+              except Exception as e:
+                  logger.error(f"DescribeSecurityGroups failed: {e}")
+                  return False, str(e)
+
+
+          def handler(event, context):
+              logger.info(f"Event: {json.dumps(event)}")
+
+              if event['RequestType'] == 'Delete':
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  return
+
+              props = event['ResourceProperties']
+              cluster_name = props['ClusterName']
+              subnet_id = props['SubnetId']
+              sg_id = props['SecurityGroupId']
+              expected_count = int(props.get('ExpectedWorkerCount', 2))
+
+              results = {}
+              all_critical_pass = True
+
+              # Run checks
+              passed, detail = check_cluster_status(cluster_name)
+              results['ClusterStatus'] = detail
+              if not passed:
+                  all_critical_pass = False
+
+              passed, detail = check_cluster_nodes(cluster_name, expected_count)
+              results['NodeCount'] = detail
+              if not passed:
+                  all_critical_pass = False
+
+              passed, detail = check_subnet_private(subnet_id)
+              results['SubnetCheck'] = detail
+              if not passed:
+                  all_critical_pass = False
+
+              passed, detail = check_security_group(sg_id)
+              results['SecurityGroupCheck'] = detail
+              # SG check is warning, not critical
+
+              results['Result'] = 'PASS' if all_critical_pass else 'FAIL'
+              logger.info(f"Validation results: {json.dumps(results)}")
+
+              status = cfnresponse.SUCCESS if all_critical_pass else cfnresponse.FAILED
+              cfnresponse.send(event, context, status, results)
+
+  # -------------------------------------------------------------------------
+  # Custom Resource (triggers validation on stack create/update)
+  # -------------------------------------------------------------------------
+  ValidationCustomResource:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt ValidationFunction.Arn
+      ClusterName: !Ref ClusterName
+      SubnetId: !Ref SubnetId
+      SecurityGroupId: !Ref SecurityGroupId
+      ExpectedWorkerCount: !Ref ExpectedWorkerCount
+
+Outputs:
+  ValidationResult:
+    Description: Overall validation result
+    Value: !GetAtt ValidationCustomResource.Result
+
+  ClusterStatus:
+    Description: HyperPod cluster status
+    Value: !GetAtt ValidationCustomResource.ClusterStatus
+
+  NodeCount:
+    Description: Running/total node count
+    Value: !GetAtt ValidationCustomResource.NodeCount
+
+  SubnetCheck:
+    Description: Subnet privacy check result
+    Value: !GetAtt ValidationCustomResource.SubnetCheck
+
+  SecurityGroupCheck:
+    Description: Security group EFA rules check
+    Value: !GetAtt ValidationCustomResource.SecurityGroupCheck

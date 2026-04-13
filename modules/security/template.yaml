@@ -1,0 +1,53 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Shared security group for SageMaker HyperPod clusters.
+  Creates a security group with self-referencing ingress required for EFA
+  (Elastic Fabric Adapter) inter-node communication.
+
+Parameters:
+  ResourceNamePrefix:
+    Type: String
+    Default: hyperpod
+    Description: Prefix applied to resource names and tags.
+
+  VpcId:
+    Type: String
+    Description: ID of the VPC in which to create the security group.
+
+Resources:
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "${ResourceNamePrefix} - HyperPod cluster security group"
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourceNamePrefix}-security-group"
+
+  # Self-referencing ingress: allows all traffic between members of this SG.
+  # This is REQUIRED by SageMaker HyperPod for:
+  #   1. EFA (Elastic Fabric Adapter) RDMA traffic between GPU/Trainium nodes
+  #   2. NCCL/NCCOM collective communication
+  #   3. Slurm daemon communication (slurmctld <-> slurmd)
+  #   4. NFS/Lustre client traffic
+  # Without this rule, distributed training will fail.
+  SecurityGroupSelfIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref SecurityGroup
+      IpProtocol: "-1"
+      SourceSecurityGroupId: !Ref SecurityGroup
+      Description: Allow all traffic from instances in this security group (EFA + inter-node)
+
+  SecurityGroupEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref SecurityGroup
+      IpProtocol: "-1"
+      CidrIp: "0.0.0.0/0"
+      Description: Allow all outbound traffic (NAT gateway, package downloads, AWS APIs)
+
+Outputs:
+  SecurityGroupId:
+    Description: ID of the HyperPod cluster security group
+    Value: !Ref SecurityGroup

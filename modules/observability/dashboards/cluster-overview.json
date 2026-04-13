@@ -1,0 +1,82 @@
+{
+  "dashboard": {
+    "uid": "hyperpod-cluster-overview",
+    "title": "HyperPod Cluster Overview",
+    "description": "Node health, CPU, memory, disk, and network metrics across the cluster",
+    "tags": ["hyperpod", "cluster"],
+    "timezone": "browser",
+    "refresh": "30s",
+    "time": { "from": "now-1h", "to": "now" },
+    "templating": {
+      "list": [
+        {
+          "name": "datasource",
+          "type": "datasource",
+          "query": "prometheus",
+          "current": { "text": "default", "value": "default" }
+        },
+        {
+          "name": "instance",
+          "type": "query",
+          "datasource": { "uid": "${datasource}" },
+          "query": "label_values(node_uname_info, instance)",
+          "multi": true,
+          "includeAll": true
+        }
+      ]
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Nodes Up",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+        "targets": [{ "expr": "count(up{job=\"node-exporter\"} == 1)", "legendFormat": "Up" }],
+        "fieldConfig": { "defaults": { "unit": "none", "thresholds": { "steps": [{ "color": "green", "value": null }] } } }
+      },
+      {
+        "id": 2,
+        "title": "Nodes Down",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+        "targets": [{ "expr": "count(up{job=\"node-exporter\"} == 0) or vector(0)", "legendFormat": "Down" }],
+        "fieldConfig": { "defaults": { "unit": "none", "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } } }
+      },
+      {
+        "id": 3,
+        "title": "CPU Utilization per Node",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+        "targets": [{ "expr": "100 - (avg by(instance) (rate(node_cpu_seconds_total{mode=\"idle\"}[5m])) * 100)", "legendFormat": "{{ instance }}" }],
+        "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 } }
+      },
+      {
+        "id": 4,
+        "title": "Memory Utilization per Node",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+        "targets": [{ "expr": "(1 - node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes) * 100", "legendFormat": "{{ instance }}" }],
+        "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 } }
+      },
+      {
+        "id": 5,
+        "title": "Disk I/O (Read)",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+        "targets": [{ "expr": "rate(node_disk_read_bytes_total[5m])", "legendFormat": "{{ instance }} {{ device }}" }],
+        "fieldConfig": { "defaults": { "unit": "Bps" } }
+      },
+      {
+        "id": 6,
+        "title": "Network Throughput",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+        "targets": [
+          { "expr": "rate(node_network_receive_bytes_total{device!=\"lo\"}[5m])", "legendFormat": "{{ instance }} RX" },
+          { "expr": "rate(node_network_transmit_bytes_total{device!=\"lo\"}[5m])", "legendFormat": "{{ instance }} TX" }
+        ],
+        "fieldConfig": { "defaults": { "unit": "Bps" } }
+      }
+    ]
+  }
+}

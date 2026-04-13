@@ -1,0 +1,60 @@
+# NeMo GPT pretraining test on EKS
+# Requires: Kubeflow MPI Operator
+#
+# Usage: kubectl apply -f job.yaml
+# Check status: kubectl get mpijobs
+
+apiVersion: kubeflow.org/v2beta1
+kind: MPIJob
+metadata:
+  name: nemo-gpt-test
+  namespace: default
+spec:
+  slotsPerWorker: 8
+  runPolicy:
+    cleanPodPolicy: Running
+  mpiReplicaSpecs:
+    Launcher:
+      replicas: 1
+      template:
+        spec:
+          containers:
+            - name: launcher
+              image: nvcr.io/nvidia/nemo:24.07
+              command:
+                - mpirun
+                - --allow-run-as-root
+                - -np
+                - "16"
+                - -npernode
+                - "8"
+                - -x
+                - NCCL_DEBUG=WARN
+                - -x
+                - FI_PROVIDER=efa
+                - python3
+                - -m
+                - nemo.collections.nlp.models.language_modeling.megatron_gpt_pretraining
+                - --config-name=megatron_gpt_config
+                - trainer.devices=8
+                - trainer.num_nodes=2
+                - trainer.max_steps=100
+                - model.micro_batch_size=2
+                - model.global_batch_size=32
+    Worker:
+      replicas: 2
+      template:
+        spec:
+          containers:
+            - name: worker
+              image: nvcr.io/nvidia/nemo:24.07
+              resources:
+                limits:
+                  nvidia.com/gpu: 8
+              volumeMounts:
+                - name: fsx
+                  mountPath: /fsx
+          volumes:
+            - name: fsx
+              persistentVolumeClaim:
+                claimName: fsx-pvc

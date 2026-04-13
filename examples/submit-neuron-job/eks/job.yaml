@@ -1,0 +1,44 @@
+# Neuron distributed test on EKS — verifies Trainium communication
+# Requires: Neuron device plugin DaemonSet
+#
+# Usage: kubectl apply -f job.yaml
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: neuron-test
+  namespace: default
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: neuron-test
+          image: 763104351884.dkr.ecr.us-west-2.amazonaws.com/pytorch-training-neuronx:2.1.2-neuronx-py310-sdk2.20.2-ubuntu20.04
+          command:
+            - python3
+            - -c
+            - |
+              import torch
+              import torch_xla.core.xla_model as xm
+
+              device = xm.xla_device()
+              print(f'XLA device: {device}')
+
+              # Simple computation on NeuronCore
+              a = torch.randn(1024, 1024, device=device)
+              b = torch.randn(1024, 1024, device=device)
+              c = torch.matmul(a, b)
+              xm.mark_step()
+
+              print(f'Matrix multiply result shape: {c.shape}')
+              print('SUCCESS: Neuron computation working!')
+          resources:
+            limits:
+              aws.amazon.com/neuron: 16
+          env:
+            - name: NEURON_RT_NUM_CORES
+              value: "32"
+            - name: FI_PROVIDER
+              value: efa
+  backoffLimit: 1

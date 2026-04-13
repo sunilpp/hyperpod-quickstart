@@ -1,0 +1,67 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  S3 bucket for storing HyperPod lifecycle scripts.
+  Scripts are uploaded to this bucket and referenced by the HyperPod cluster
+  during node initialization.
+
+Parameters:
+  ResourceNamePrefix:
+    Type: String
+    Default: hyperpod
+    Description: Prefix applied to resource names.
+
+  SageMakerRoleArn:
+    Type: String
+    Default: ""
+    Description: ARN of the SageMaker execution role (for bucket policy).
+
+Conditions:
+  HasSageMakerRole: !Not [!Equals [!Ref SageMakerRoleArn, ""]]
+
+Resources:
+  LifecycleScriptsBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    Properties:
+      BucketName: !Sub "${ResourceNamePrefix}-lifecycle-${AWS::AccountId}-${AWS::Region}"
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourceNamePrefix}-lifecycle-scripts"
+
+  BucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Condition: HasSageMakerRole
+    Properties:
+      Bucket: !Ref LifecycleScriptsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !Ref SageMakerRoleArn
+            Action:
+              - s3:GetObject
+              - s3:ListBucket
+            Resource:
+              - !GetAtt LifecycleScriptsBucket.Arn
+              - !Sub "${LifecycleScriptsBucket.Arn}/*"
+
+Outputs:
+  BucketName:
+    Description: Name of the lifecycle scripts S3 bucket
+    Value: !Ref LifecycleScriptsBucket
+
+  BucketArn:
+    Description: ARN of the lifecycle scripts S3 bucket
+    Value: !GetAtt LifecycleScriptsBucket.Arn

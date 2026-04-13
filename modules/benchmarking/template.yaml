@@ -1,0 +1,243 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Benchmarking stack for HyperPod clusters.
+  Creates an SSM document and Lambda custom resource to run NCCL (GPU)
+  or NCCOM (Trainium) benchmarks and store results in S3.
+
+Parameters:
+  ResourceNamePrefix:
+    Type: String
+    Default: hyperpod
+
+  ClusterName:
+    Type: String
+  ClusterArn:
+    Type: String
+  ResultsBucket:
+    Type: String
+
+  ComputeType:
+    Type: String
+    AllowedValues: [gpu, trainium]
+    Default: gpu
+
+  Orchestrator:
+    Type: String
+    AllowedValues: [eks, slurm]
+    Default: slurm
+
+Conditions:
+  IsSlurm: !Equals [!Ref Orchestrator, "slurm"]
+
+Resources:
+
+  # -------------------------------------------------------------------------
+  # Benchmark SSM Document
+  # -------------------------------------------------------------------------
+  BenchmarkDocument:
+    Type: AWS::SSM::Document
+    Condition: IsSlurm
+    Properties:
+      Name: !Sub "${ResourceNamePrefix}-benchmark"
+      DocumentType: Command
+      Content:
+        schemaVersion: "2.2"
+        description: "Run network bandwidth benchmark on HyperPod cluster"
+        parameters:
+          ComputeType:
+            type: String
+            default: !Ref ComputeType
+            allowedValues: ["gpu", "trainium"]
+          ResultsBucket:
+            type: String
+            default: !Ref ResultsBucket
+        mainSteps:
+          - action: aws:runShellScript
+            name: RunBenchmark
+            inputs:
+              timeoutSeconds: "3600"
+              runCommand:
+                - "#!/bin/bash"
+                - "set -euo pipefail"
+                - "RESULTS_DIR=/tmp/benchmark-results-$(date +%Y%m%d-%H%M%S)"
+                - "mkdir -p $RESULTS_DIR"
+                - ""
+                - "echo '=== HyperPod Network Benchmark ===' | tee $RESULTS_DIR/benchmark.log"
+                - "echo \"Compute type: {{ ComputeType }}\" | tee -a $RESULTS_DIR/benchmark.log"
+                - "echo \"Date: $(date)\" | tee -a $RESULTS_DIR/benchmark.log"
+                - ""
+                - "if [ '{{ ComputeType }}' = 'gpu' ]; then"
+                - "  echo 'Running NCCL all-reduce benchmark...' | tee -a $RESULTS_DIR/benchmark.log"
+                - "  if command -v nccl-tests-all_reduce_perf &>/dev/null; then"
+                - "    nccl-tests-all_reduce_perf -b 8 -e 4G -f 2 -g 8 2>&1 | tee $RESULTS_DIR/nccl-allreduce.log"
+                - "  else"
+                - "    echo 'NCCL tests not found. Install from: https://github.com/NVIDIA/nccl-tests' | tee -a $RESULTS_DIR/benchmark.log"
+                - "    echo 'Manual run: srun --mpi=pmix -N 2 --ntasks-per-node=8 /opt/nccl-tests/build/all_reduce_perf -b 8 -e 4G -f 2 -g 1' | tee -a $RESULTS_DIR/benchmark.log"
+                - "  fi"
+                - "else"
+                - "  echo 'Running NCCOM all-reduce benchmark...' | tee -a $RESULTS_DIR/benchmark.log"
+                - "  if command -v nccom-test &>/dev/null; then"
+                - "    nccom-test all_reduce --data-type fp32 --size 4G 2>&1 | tee $RESULTS_DIR/nccom-allreduce.log"
+                - "  else"
+                - "    echo 'NCCOM tests not found. Use neuronx-distributed benchmark tools.' | tee -a $RESULTS_DIR/benchmark.log"
+                - "  fi"
+                - "fi"
+                - ""
+                - "echo 'Uploading results to S3...' | tee -a $RESULTS_DIR/benchmark.log"
+                - "aws s3 cp $RESULTS_DIR/ s3://{{ ResultsBucket }}/benchmark-results/ --recursive"
+                - "echo 'Benchmark complete. Results at s3://{{ ResultsBucket }}/benchmark-results/' | tee -a $RESULTS_DIR/benchmark.log"
+
+  # -------------------------------------------------------------------------
+  # Benchmark Lambda Role
+  # -------------------------------------------------------------------------
+  BenchmarkLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourceNamePrefix}-benchmark-lambda-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+        - PolicyName: BenchmarkPermissions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sagemaker:DescribeCluster
+                  - sagemaker:ListClusterNodes
+                Resource: !Ref ClusterArn
+              - Effect: Allow
+                Action:
+                  - ssm:SendCommand
+                  - ssm:GetCommandInvocation
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: !Sub "arn:${AWS::Partition}:s3:::${ResultsBucket}/*"
+
+  # -------------------------------------------------------------------------
+  # Benchmark Lambda Function
+  # -------------------------------------------------------------------------
+  BenchmarkFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ResourceNamePrefix}-benchmark-runner"
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 600
+      MemorySize: 256
+      Role: !GetAtt BenchmarkLambdaRole.Arn
+      Environment:
+        Variables:
+          COMPUTE_TYPE: !Ref ComputeType
+          ORCHESTRATOR: !Ref Orchestrator
+          RESULTS_BUCKET: !Ref ResultsBucket
+      Code:
+        ZipFile: |
+          import json
+          import logging
+          import os
+          import boto3
+          import cfnresponse
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          sm = boto3.client('sagemaker')
+          s3 = boto3.client('s3')
+
+
+          def handler(event, context):
+              logger.info(f"Event: {json.dumps(event)}")
+
+              if event['RequestType'] == 'Delete':
+                  cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                  return
+
+              props = event['ResourceProperties']
+              cluster_name = props['ClusterName']
+              compute_type = os.environ.get('COMPUTE_TYPE', 'gpu')
+              orchestrator = os.environ.get('ORCHESTRATOR', 'slurm')
+              results_bucket = os.environ.get('RESULTS_BUCKET', '')
+
+              results = {}
+
+              # Generate benchmark instructions
+              if compute_type == 'gpu':
+                  benchmark_name = 'NCCL AllReduce'
+                  manual_cmd = (
+                      'srun --mpi=pmix -N 2 --ntasks-per-node=8 '
+                      '/opt/nccl-tests/build/all_reduce_perf -b 8 -e 4G -f 2 -g 1'
+                      if orchestrator == 'slurm'
+                      else 'kubectl apply -f examples/nccl-benchmark-job.yaml'
+                  )
+                  expected_bw = '~900 Gbps bus bandwidth per GPU (p5.48xlarge)'
+              else:
+                  benchmark_name = 'NCCOM AllReduce'
+                  manual_cmd = (
+                      'srun -N 2 --ntasks-per-node=1 nccom-test all_reduce '
+                      '--data-type fp32 --size 4G'
+                      if orchestrator == 'slurm'
+                      else 'kubectl apply -f examples/nccom-benchmark-job.yaml'
+                  )
+                  expected_bw = '~800 Gbps (trn1.32xlarge via EFA)'
+
+              instructions = {
+                  'benchmark': benchmark_name,
+                  'manual_command': manual_cmd,
+                  'expected_performance': expected_bw,
+                  'results_location': f's3://{results_bucket}/benchmark-results/',
+                  'note': (
+                      'Automated benchmark execution requires SSM access to '
+                      'cluster nodes. If this was not possible, run the manual '
+                      'command above from the cluster head node or kubectl.'
+                  ),
+              }
+
+              # Store instructions in S3
+              try:
+                  s3.put_object(
+                      Bucket=results_bucket,
+                      Key='benchmark-results/instructions.json',
+                      Body=json.dumps(instructions, indent=2),
+                      ContentType='application/json',
+                  )
+                  logger.info('Benchmark instructions uploaded to S3')
+              except Exception as e:
+                  logger.warning(f'Could not upload to S3: {e}')
+
+              results['BenchmarkStatus'] = 'INSTRUCTIONS_GENERATED'
+              results['ResultsS3Path'] = f's3://{results_bucket}/benchmark-results/'
+              results['ManualRunInstructions'] = manual_cmd
+
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, results)
+
+  # -------------------------------------------------------------------------
+  # Custom Resource
+  # -------------------------------------------------------------------------
+  BenchmarkCustomResource:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt BenchmarkFunction.Arn
+      ClusterName: !Ref ClusterName
+
+Outputs:
+  BenchmarkStatus:
+    Description: Benchmark execution status
+    Value: !GetAtt BenchmarkCustomResource.BenchmarkStatus
+
+  ResultsS3Path:
+    Description: S3 path to benchmark results
+    Value: !GetAtt BenchmarkCustomResource.ResultsS3Path
+
+  ManualRunInstructions:
+    Description: Command to run benchmarks manually
+    Value: !GetAtt BenchmarkCustomResource.ManualRunInstructions

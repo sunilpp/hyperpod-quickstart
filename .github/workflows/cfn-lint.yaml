@@ -1,0 +1,91 @@
+name: Validate CloudFormation Templates
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  cfn-lint:
+    name: CloudFormation Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install cfn-lint
+        run: pip install cfn-lint
+
+      - name: Lint all CloudFormation templates
+        run: |
+          cfn-lint \
+            stacks/*/template.yaml \
+            modules/networking/template.yaml \
+            modules/security/template.yaml \
+            modules/iam/template.yaml \
+            modules/storage/*.yaml \
+            modules/eks/*.yaml \
+            modules/hyperpod/cluster.yaml \
+            modules/observability/gpu-observability.yaml \
+            modules/observability/trainium-observability.yaml \
+            modules/validation/template.yaml \
+            modules/benchmarking/template.yaml
+
+  yaml-lint:
+    name: YAML Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Lint YAML files
+        run: |
+          yamllint -d "{extends: relaxed, rules: {line-length: {max: 200}}}" \
+            stacks/*/template.yaml \
+            modules/**/*.yaml
+
+  python-lint:
+    name: Python Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install flake8
+        run: pip install flake8
+
+      - name: Lint Lambda functions
+        run: |
+          flake8 lambda/ \
+            --max-line-length=120 \
+            --ignore=E501,W503
+
+  json-validate:
+    name: JSON Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate JSON files
+        run: |
+          for f in $(find . -name "*.json" -not -path "./.git/*"); do
+            echo "Validating $f"
+            python3 -m json.tool "$f" > /dev/null || exit 1
+          done
+          echo "All JSON files valid"

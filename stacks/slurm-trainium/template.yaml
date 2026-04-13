@@ -1,0 +1,218 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  HyperPod Quick Start: Slurm + AWS Trainium.
+  Deploys a complete SageMaker HyperPod cluster with Slurm orchestrator
+  and Trainium instances for cost-efficient PyTorch training.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Cluster Configuration
+        Parameters:
+          - ClusterName
+          - ClusterSize
+          - AvailabilityZoneId
+      - Label:
+          default: Advanced - Instance Configuration
+        Parameters:
+          - WorkerInstanceType
+          - ControllerInstanceType
+      - Label:
+          default: Features
+        Parameters:
+          - EnableObservability
+          - EnableValidation
+          - RunBenchmarks
+      - Label:
+          default: Template Location
+        Parameters:
+          - TemplateBaseUrl
+
+Parameters:
+  ClusterName:
+    Type: String
+    Default: my-hyperpod-trn
+    AllowedPattern: ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$
+    MaxLength: 63
+
+  ClusterSize:
+    Type: String
+    Default: small
+    AllowedValues: [small, medium, large]
+
+  AvailabilityZoneId:
+    Type: String
+    Default: usw2-az2
+    AllowedPattern: ^[a-z]{3,4}[0-9]-az[0-9]$
+
+  WorkerInstanceType:
+    Type: String
+    Default: ml.trn1.32xlarge
+
+  ControllerInstanceType:
+    Type: String
+    Default: ml.m5.2xlarge
+
+  EnableObservability:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+
+  EnableValidation:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+
+  RunBenchmarks:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+
+  TemplateBaseUrl:
+    Type: String
+    Default: ""
+
+Mappings:
+  ClusterSizeMap:
+    small:
+      WorkerCount: "2"
+      FSxCapacity: "1200"
+      EBSVolume: "500"
+    medium:
+      WorkerCount: "8"
+      FSxCapacity: "4800"
+      EBSVolume: "500"
+    large:
+      WorkerCount: "32"
+      FSxCapacity: "14400"
+      EBSVolume: "1000"
+
+Conditions:
+  ObservabilityEnabled: !Equals [!Ref EnableObservability, "true"]
+  ValidationEnabled: !Equals [!Ref EnableValidation, "true"]
+  BenchmarksEnabled: !Equals [!Ref RunBenchmarks, "true"]
+
+Resources:
+  NetworkingStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/networking/template.yaml"
+      Parameters:
+        ResourceNamePrefix: !Ref ClusterName
+        PrimaryAZ: !Ref AvailabilityZoneId
+
+  SecurityStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/security/template.yaml"
+      Parameters:
+        ResourceNamePrefix: !Ref ClusterName
+        VpcId: !GetAtt NetworkingStack.Outputs.VpcId
+
+  StorageStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/storage/fsx-lustre.yaml"
+      Parameters:
+        ResourceNamePrefix: !Ref ClusterName
+        SubnetId: !GetAtt NetworkingStack.Outputs.PrivateSubnetId
+        SecurityGroupId: !GetAtt SecurityStack.Outputs.SecurityGroupId
+        StorageCapacityGiB: !FindInMap [ClusterSizeMap, !Ref ClusterSize, FSxCapacity]
+
+  S3Stack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/storage/s3-lifecycle.yaml"
+      Parameters:
+        ResourceNamePrefix: !Ref ClusterName
+
+  IAMStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/iam/template.yaml"
+      Parameters:
+        ResourceNamePrefix: !Ref ClusterName
+        LifecycleScriptsBucket: !GetAtt S3Stack.Outputs.BucketName
+        PrometheusWorkspaceArn: !If
+          - ObservabilityEnabled
+          - !GetAtt ObservabilityStack.Outputs.PrometheusWorkspaceArn
+          - ""
+
+  HyperPodStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/hyperpod/cluster.yaml"
+      Parameters:
+        ResourceNamePrefix: !Ref ClusterName
+        ClusterName: !Ref ClusterName
+        Orchestrator: slurm
+        SecurityGroupId: !GetAtt SecurityStack.Outputs.SecurityGroupId
+        SubnetId: !GetAtt NetworkingStack.Outputs.PrivateSubnetId
+        ExecutionRoleArn: !GetAtt IAMStack.Outputs.RoleArn
+        LifecycleS3Bucket: !GetAtt S3Stack.Outputs.BucketName
+        LifecycleS3KeyPrefix: lifecycle-scripts
+        WorkerInstanceGroupName: worker-group
+        WorkerInstanceType: !Ref WorkerInstanceType
+        WorkerInstanceCount: !FindInMap [ClusterSizeMap, !Ref ClusterSize, WorkerCount]
+        WorkerEBSVolumeSize: !FindInMap [ClusterSizeMap, !Ref ClusterSize, EBSVolume]
+        WorkerLifecycleScript: on_create.sh
+        CreateControllerGroup: "true"
+        ControllerInstanceType: !Ref ControllerInstanceType
+
+  ObservabilityStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: ObservabilityEnabled
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/observability/trainium-observability.yaml"
+      Parameters:
+        ResourceNamePrefix: !Ref ClusterName
+
+  ValidationStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: ValidationEnabled
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/validation/template.yaml"
+      Parameters:
+        ResourceNamePrefix: !Ref ClusterName
+        ClusterName: !GetAtt HyperPodStack.Outputs.ClusterName
+        ClusterArn: !GetAtt HyperPodStack.Outputs.ClusterArn
+        SubnetId: !GetAtt NetworkingStack.Outputs.PrivateSubnetId
+        SecurityGroupId: !GetAtt SecurityStack.Outputs.SecurityGroupId
+        ExpectedWorkerCount: !FindInMap [ClusterSizeMap, !Ref ClusterSize, WorkerCount]
+
+  BenchmarkStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: BenchmarksEnabled
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/benchmarking/template.yaml"
+      Parameters:
+        ResourceNamePrefix: !Ref ClusterName
+        ClusterName: !GetAtt HyperPodStack.Outputs.ClusterName
+        ClusterArn: !GetAtt HyperPodStack.Outputs.ClusterArn
+        ResultsBucket: !GetAtt S3Stack.Outputs.BucketName
+        ComputeType: trainium
+        Orchestrator: slurm
+
+Outputs:
+  ClusterArn:
+    Value: !GetAtt HyperPodStack.Outputs.ClusterArn
+  ClusterName:
+    Value: !GetAtt HyperPodStack.Outputs.ClusterName
+  VpcId:
+    Value: !GetAtt NetworkingStack.Outputs.VpcId
+  FSxDnsName:
+    Value: !GetAtt StorageStack.Outputs.FileSystemDnsName
+  FSxMountName:
+    Value: !GetAtt StorageStack.Outputs.MountName
+  LifecycleScriptsBucket:
+    Value: !GetAtt S3Stack.Outputs.BucketName
+  GrafanaDashboardUrl:
+    Condition: ObservabilityEnabled
+    Value: !GetAtt ObservabilityStack.Outputs.GrafanaWorkspaceUrl
+  ValidationResult:
+    Condition: ValidationEnabled
+    Value: !GetAtt ValidationStack.Outputs.ValidationResult
+  BenchmarkResults:
+    Condition: BenchmarksEnabled
+    Value: !GetAtt BenchmarkStack.Outputs.ResultsS3Path

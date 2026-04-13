@@ -1,0 +1,8 @@
+[
+  { "ParameterKey": "ClusterName", "ParameterValue": "my-hyperpod" },
+  { "ParameterKey": "ClusterSize", "ParameterValue": "medium" },
+  { "ParameterKey": "AvailabilityZoneId", "ParameterValue": "usw2-az2" },
+  { "ParameterKey": "EnableObservability", "ParameterValue": "true" },
+  { "ParameterKey": "EnableValidation", "ParameterValue": "true" },
+  { "ParameterKey": "RunBenchmarks", "ParameterValue": "false" }
+]

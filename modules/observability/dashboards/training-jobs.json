@@ -1,0 +1,65 @@
+{
+  "dashboard": {
+    "uid": "hyperpod-training-jobs",
+    "title": "HyperPod Training Jobs",
+    "description": "Training job metrics and resource consumption",
+    "tags": ["hyperpod", "training", "jobs"],
+    "timezone": "browser",
+    "refresh": "30s",
+    "time": { "from": "now-1h", "to": "now" },
+    "templating": {
+      "list": [
+        {
+          "name": "datasource",
+          "type": "datasource",
+          "query": "prometheus"
+        }
+      ]
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "Active Jobs",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 8, "x": 0, "y": 0 },
+        "targets": [{ "expr": "slurm_queue_running OR kube_pod_status_phase{phase=\"Running\", namespace=~\".*training.*\"}", "legendFormat": "Running" }],
+        "fieldConfig": { "defaults": { "unit": "none" } }
+      },
+      {
+        "id": 2,
+        "title": "Pending Jobs",
+        "type": "stat",
+        "gridPos": { "h": 4, "w": 8, "x": 8, "y": 0 },
+        "targets": [{ "expr": "slurm_queue_pending OR kube_pod_status_phase{phase=\"Pending\", namespace=~\".*training.*\"}", "legendFormat": "Pending" }],
+        "fieldConfig": { "defaults": { "unit": "none", "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 5 }] } } }
+      },
+      {
+        "id": 3,
+        "title": "Cluster GPU/NeuronCore Hours",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+        "targets": [{ "expr": "sum(increase(DCGM_FI_DEV_GPU_UTIL[1h])) / 100 OR sum(increase(neuron_runtime_vcore_usage[1h])) / 100", "legendFormat": "Accelerator Hours" }],
+        "fieldConfig": { "defaults": { "unit": "h" } }
+      },
+      {
+        "id": 4,
+        "title": "Node Allocation",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+        "targets": [
+          { "expr": "count(up{job=\"node-exporter\"} == 1)", "legendFormat": "Total Nodes" },
+          { "expr": "slurm_nodes_alloc OR count(kube_pod_status_phase{phase=\"Running\", namespace=~\".*training.*\"})", "legendFormat": "Allocated" }
+        ],
+        "fieldConfig": { "defaults": { "unit": "none" } }
+      },
+      {
+        "id": 5,
+        "title": "Average GPU/NeuronCore Utilization",
+        "type": "gauge",
+        "gridPos": { "h": 6, "w": 12, "x": 0, "y": 12 },
+        "targets": [{ "expr": "avg(DCGM_FI_DEV_GPU_UTIL) OR avg(neuron_runtime_vcore_usage)", "legendFormat": "Avg Utilization" }],
+        "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100, "thresholds": { "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": 30 }, { "color": "green", "value": 70 }] } } }
+      }
+    ]
+  }
+}

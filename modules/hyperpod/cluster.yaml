@@ -1,0 +1,163 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  SageMaker HyperPod cluster resource. Supports both EKS and Slurm
+  orchestrators, and both GPU and Trainium instance types via parameters.
+
+Parameters:
+  ResourceNamePrefix:
+    Type: String
+    Default: hyperpod
+
+  ClusterName:
+    Type: String
+    Default: my-hyperpod-cluster
+
+  Orchestrator:
+    Type: String
+    AllowedValues: [eks, slurm]
+    Default: slurm
+
+  NodeRecovery:
+    Type: String
+    AllowedValues: [Automatic, None]
+    Default: Automatic
+
+  EKSClusterArn:
+    Type: String
+    Default: ""
+    Description: Required when Orchestrator=eks.
+
+  SecurityGroupId:
+    Type: String
+  SubnetId:
+    Type: String
+  ExecutionRoleArn:
+    Type: String
+
+  LifecycleS3Bucket:
+    Type: String
+  LifecycleS3KeyPrefix:
+    Type: String
+    Default: lifecycle-scripts
+
+  # Worker instance group
+  WorkerInstanceGroupName:
+    Type: String
+    Default: worker-group
+
+  WorkerInstanceType:
+    Type: String
+    Default: ml.p5.48xlarge
+
+  WorkerInstanceCount:
+    Type: Number
+    Default: 2
+
+  WorkerEBSVolumeSize:
+    Type: Number
+    Default: 500
+
+  WorkerThreadsPerCore:
+    Type: Number
+    Default: 1
+    AllowedValues: [1, 2]
+
+  WorkerLifecycleScript:
+    Type: String
+    Default: on_create.sh
+
+  WorkerTrainingPlanArn:
+    Type: String
+    Default: ""
+
+  # Controller instance group (Slurm head node)
+  CreateControllerGroup:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+
+  ControllerInstanceGroupName:
+    Type: String
+    Default: controller-group
+
+  ControllerInstanceType:
+    Type: String
+    Default: ml.m5.2xlarge
+
+  ControllerInstanceCount:
+    Type: Number
+    Default: 1
+
+  ControllerEBSVolumeSize:
+    Type: Number
+    Default: 200
+
+  ControllerLifecycleScript:
+    Type: String
+    Default: on_create.sh
+
+Conditions:
+  IsEKS: !Equals [!Ref Orchestrator, "eks"]
+  CreateController: !Equals [!Ref CreateControllerGroup, "true"]
+  HasTrainingPlan: !Not [!Equals [!Ref WorkerTrainingPlanArn, ""]]
+
+Resources:
+  HyperPodCluster:
+    Type: AWS::SageMaker::Cluster
+    Properties:
+      ClusterName: !Sub "${ResourceNamePrefix}-${ClusterName}"
+      Orchestrator: !If
+        - IsEKS
+        - Eks:
+            ClusterArn: !Ref EKSClusterArn
+        - !Ref AWS::NoValue
+      NodeRecovery: !Ref NodeRecovery
+      VpcConfig:
+        SecurityGroupIds:
+          - !Ref SecurityGroupId
+        Subnets:
+          - !Ref SubnetId
+      InstanceGroups:
+        - InstanceGroupName: !Ref WorkerInstanceGroupName
+          InstanceType: !Ref WorkerInstanceType
+          InstanceCount: !Ref WorkerInstanceCount
+          ExecutionRole: !Ref ExecutionRoleArn
+          ThreadsPerCore: !Ref WorkerThreadsPerCore
+          LifeCycleConfig:
+            SourceS3Uri: !Sub "s3://${LifecycleS3Bucket}/${LifecycleS3KeyPrefix}"
+            OnCreate: !Ref WorkerLifecycleScript
+          InstanceStorageConfigs:
+            - EbsVolumeConfig:
+                VolumeSizeInGB: !Ref WorkerEBSVolumeSize
+          TrainingPlanArn: !If
+            - HasTrainingPlan
+            - !Ref WorkerTrainingPlanArn
+            - !Ref AWS::NoValue
+        - !If
+          - CreateController
+          - InstanceGroupName: !Ref ControllerInstanceGroupName
+            InstanceType: !Ref ControllerInstanceType
+            InstanceCount: !Ref ControllerInstanceCount
+            ExecutionRole: !Ref ExecutionRoleArn
+            ThreadsPerCore: 1
+            LifeCycleConfig:
+              SourceS3Uri: !Sub "s3://${LifecycleS3Bucket}/${LifecycleS3KeyPrefix}"
+              OnCreate: !Ref ControllerLifecycleScript
+            InstanceStorageConfigs:
+              - EbsVolumeConfig:
+                  VolumeSizeInGB: !Ref ControllerEBSVolumeSize
+          - !Ref AWS::NoValue
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourceNamePrefix}-${ClusterName}"
+        - Key: ManagedBy
+          Value: CloudFormation
+
+Outputs:
+  ClusterArn:
+    Description: ARN of the HyperPod cluster
+    Value: !GetAtt HyperPodCluster.ClusterArn
+
+  ClusterName:
+    Description: Name of the HyperPod cluster
+    Value: !Sub "${ResourceNamePrefix}-${ClusterName}"

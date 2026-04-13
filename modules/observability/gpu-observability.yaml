@@ -1,0 +1,153 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Observability stack for GPU-based HyperPod clusters.
+  Creates Amazon Managed Prometheus (AMP) and Amazon Managed Grafana (AMG)
+  workspaces with pre-configured alert rules for GPU metrics.
+
+Parameters:
+  ResourceNamePrefix:
+    Type: String
+    Default: hyperpod
+
+
+Resources:
+
+  # -------------------------------------------------------------------------
+  # Amazon Managed Prometheus (AMP)
+  # -------------------------------------------------------------------------
+  PrometheusWorkspace:
+    Type: AWS::APS::Workspace
+    Properties:
+      Alias: !Sub "${ResourceNamePrefix}-prometheus"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourceNamePrefix}-prometheus"
+
+  # Alert rules for GPU clusters
+  PrometheusAlertRules:
+    Type: AWS::APS::RuleGroupsNamespace
+    Properties:
+      Workspace: !GetAtt PrometheusWorkspace.Arn
+      Name: !Sub "${ResourceNamePrefix}-gpu-alerts"
+      Data: |
+        groups:
+          - name: hyperpod-gpu-alerts
+            rules:
+              - alert: GPUUnderutilized
+                expr: avg(DCGM_FI_DEV_GPU_UTIL) < 10
+                for: 30m
+                labels:
+                  severity: warning
+                annotations:
+                  summary: "GPU utilization below 10% for 30 minutes"
+                  description: "Average GPU utilization is {{ $value }}%. Check if training jobs are running."
+
+              - alert: GPUMemoryHigh
+                expr: (DCGM_FI_DEV_FB_USED / (DCGM_FI_DEV_FB_USED + DCGM_FI_DEV_FB_FREE)) * 100 > 95
+                for: 10m
+                labels:
+                  severity: warning
+                annotations:
+                  summary: "GPU memory usage above 95%"
+                  description: "GPU memory usage is {{ $value }}%. Risk of OOM errors."
+
+              - alert: GPUTemperatureHigh
+                expr: DCGM_FI_DEV_GPU_TEMP > 85
+                for: 5m
+                labels:
+                  severity: critical
+                annotations:
+                  summary: "GPU temperature above 85C"
+                  description: "GPU temperature is {{ $value }}C. Thermal throttling may occur."
+
+              - alert: NodeDown
+                expr: up == 0
+                for: 5m
+                labels:
+                  severity: critical
+                annotations:
+                  summary: "Node unreachable for 5 minutes"
+                  description: "Node {{ $labels.instance }} is down."
+
+              - alert: EFAErrors
+                expr: rate(efa_rdma_read_errors_total[5m]) > 0
+                for: 5m
+                labels:
+                  severity: warning
+                annotations:
+                  summary: "EFA RDMA errors detected"
+                  description: "EFA errors on {{ $labels.instance }}."
+
+              - alert: DiskUsageHigh
+                expr: (1 - node_filesystem_avail_bytes / node_filesystem_size_bytes) * 100 > 90
+                for: 10m
+                labels:
+                  severity: warning
+                annotations:
+                  summary: "Disk usage above 90%"
+                  description: "Filesystem {{ $labels.mountpoint }} is {{ $value }}% full."
+
+  # -------------------------------------------------------------------------
+  # Amazon Managed Grafana (AMG)
+  # -------------------------------------------------------------------------
+  GrafanaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourceNamePrefix}-grafana-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: grafana.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PrometheusAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - aps:QueryMetrics
+                  - aps:GetLabels
+                  - aps:GetSeries
+                  - aps:GetMetricMetadata
+                  - aps:ListWorkspaces
+                  - aps:DescribeWorkspace
+                Resource: "*"
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonGrafanaCloudWatchAccess"
+
+  GrafanaWorkspace:
+    Type: AWS::Grafana::Workspace
+    Properties:
+      Name: !Sub "${ResourceNamePrefix}-grafana"
+      AccountAccessType: CURRENT_ACCOUNT
+      AuthenticationProviders:
+        - AWS_SSO
+      PermissionType: SERVICE_MANAGED
+      DataSources:
+        - PROMETHEUS
+        - CLOUDWATCH
+      RoleArn: !GetAtt GrafanaRole.Arn
+
+Outputs:
+  PrometheusWorkspaceId:
+    Description: AMP workspace ID
+    Value: !GetAtt PrometheusWorkspace.WorkspaceId
+
+  PrometheusEndpoint:
+    Description: AMP remote write / query endpoint
+    Value: !GetAtt PrometheusWorkspace.PrometheusEndpoint
+
+  PrometheusWorkspaceArn:
+    Description: AMP workspace ARN
+    Value: !GetAtt PrometheusWorkspace.Arn
+
+  GrafanaWorkspaceId:
+    Description: AMG workspace ID
+    Value: !Ref GrafanaWorkspace
+
+  GrafanaWorkspaceUrl:
+    Description: Grafana dashboard URL
+    Value: !GetAtt GrafanaWorkspace.Endpoint

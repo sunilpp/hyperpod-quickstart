@@ -1,0 +1,81 @@
+{
+  "dashboard": {
+    "uid": "hyperpod-efa-performance",
+    "title": "HyperPod EFA Performance",
+    "description": "Elastic Fabric Adapter network metrics",
+    "tags": ["hyperpod", "efa", "network"],
+    "timezone": "browser",
+    "refresh": "30s",
+    "time": { "from": "now-1h", "to": "now" },
+    "templating": {
+      "list": [
+        {
+          "name": "datasource",
+          "type": "datasource",
+          "query": "prometheus"
+        },
+        {
+          "name": "instance",
+          "type": "query",
+          "datasource": { "uid": "${datasource}" },
+          "query": "label_values(efa_tx_bytes_total, instance)",
+          "multi": true,
+          "includeAll": true
+        }
+      ]
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "EFA TX Throughput",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+        "targets": [{ "expr": "rate(efa_tx_bytes_total{instance=~\"$instance\"}[5m])", "legendFormat": "{{ instance }} {{ device }}" }],
+        "fieldConfig": { "defaults": { "unit": "Bps" } }
+      },
+      {
+        "id": 2,
+        "title": "EFA RX Throughput",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+        "targets": [{ "expr": "rate(efa_rx_bytes_total{instance=~\"$instance\"}[5m])", "legendFormat": "{{ instance }} {{ device }}" }],
+        "fieldConfig": { "defaults": { "unit": "Bps" } }
+      },
+      {
+        "id": 3,
+        "title": "EFA TX Packets/sec",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+        "targets": [{ "expr": "rate(efa_tx_pkts_total{instance=~\"$instance\"}[5m])", "legendFormat": "{{ instance }}" }],
+        "fieldConfig": { "defaults": { "unit": "pps" } }
+      },
+      {
+        "id": 4,
+        "title": "EFA RX Packets/sec",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+        "targets": [{ "expr": "rate(efa_rx_pkts_total{instance=~\"$instance\"}[5m])", "legendFormat": "{{ instance }}" }],
+        "fieldConfig": { "defaults": { "unit": "pps" } }
+      },
+      {
+        "id": 5,
+        "title": "RDMA Read/Write Ops",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+        "targets": [
+          { "expr": "rate(efa_rdma_read_total{instance=~\"$instance\"}[5m])", "legendFormat": "{{ instance }} read" },
+          { "expr": "rate(efa_rdma_write_total{instance=~\"$instance\"}[5m])", "legendFormat": "{{ instance }} write" }
+        ],
+        "fieldConfig": { "defaults": { "unit": "ops" } }
+      },
+      {
+        "id": 6,
+        "title": "EFA RDMA Errors",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 16 },
+        "targets": [{ "expr": "rate(efa_rdma_read_errors_total{instance=~\"$instance\"}[5m])", "legendFormat": "{{ instance }} errors" }],
+        "fieldConfig": { "defaults": { "unit": "ops", "thresholds": { "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] } } }
+      }
+    ]
+  }
+}

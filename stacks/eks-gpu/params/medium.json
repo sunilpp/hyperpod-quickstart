@@ -1,0 +1,9 @@
+[
+  { "ParameterKey": "ClusterName", "ParameterValue": "my-hyperpod-eks" },
+  { "ParameterKey": "ClusterSize", "ParameterValue": "medium" },
+  { "ParameterKey": "AvailabilityZoneId", "ParameterValue": "usw2-az2" },
+  { "ParameterKey": "KubernetesVersion", "ParameterValue": "1.31" },
+  { "ParameterKey": "EnableObservability", "ParameterValue": "true" },
+  { "ParameterKey": "EnableValidation", "ParameterValue": "true" },
+  { "ParameterKey": "RunBenchmarks", "ParameterValue": "false" }
+]

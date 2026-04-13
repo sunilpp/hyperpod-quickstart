@@ -1,0 +1,13 @@
+{
+    "version": "1.0.0",
+    "workload_manager": "slurm",
+    "controller_group": "controller-group",
+    "worker_groups": [
+        {
+            "instance_group_name": "worker-group",
+            "partition_name": "gpu"
+        }
+    ],
+    "fsx_dns_name": "PLACEHOLDER_FSX_DNS",
+    "fsx_mountname": "PLACEHOLDER_FSX_MOUNT"
+}

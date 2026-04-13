@@ -1,0 +1,290 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  HyperPod Quick Start: Slurm + NVIDIA GPU.
+  Deploys a complete SageMaker HyperPod cluster with Slurm orchestrator
+  and NVIDIA GPU instances, including networking, shared storage,
+  monitoring, and post-deploy validation.
+
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Cluster Configuration
+        Parameters:
+          - ClusterName
+          - ClusterSize
+          - AvailabilityZoneId
+      - Label:
+          default: Advanced - Instance Configuration
+        Parameters:
+          - WorkerInstanceType
+          - ControllerInstanceType
+      - Label:
+          default: Features
+        Parameters:
+          - EnableObservability
+          - EnableValidation
+          - RunBenchmarks
+      - Label:
+          default: Template Location
+        Parameters:
+          - TemplateBaseUrl
+
+Parameters:
+  ClusterName:
+    Type: String
+    Default: my-hyperpod
+    Description: Name for your HyperPod cluster.
+    AllowedPattern: ^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?$
+    MaxLength: 63
+
+  ClusterSize:
+    Type: String
+    Default: small
+    AllowedValues: [small, medium, large]
+    Description: >
+      small = 2 workers + 1.2TB storage.
+      medium = 8 workers + 4.8TB storage.
+      large = 32 workers + 14.4TB storage.
+
+  AvailabilityZoneId:
+    Type: String
+    Default: usw2-az2
+    Description: AZ with capacity for your instance type (e.g., usw2-az2).
+    AllowedPattern: ^[a-z]{3,4}[0-9]-az[0-9]$
+
+  WorkerInstanceType:
+    Type: String
+    Default: ml.p5.48xlarge
+    Description: Instance type for GPU worker nodes.
+
+  ControllerInstanceType:
+    Type: String
+    Default: ml.m5.2xlarge
+    Description: Instance type for Slurm controller (head) node.
+
+  EnableObservability:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Deploy Prometheus + Grafana monitoring dashboards.
+
+  EnableValidation:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: Run post-deployment health checks.
+
+  RunBenchmarks:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: Run NCCL performance benchmarks after deployment.
+
+  TemplateBaseUrl:
+    Type: String
+    Default: ""
+    Description: >
+      S3 URL prefix where nested stack templates are stored.
+      Example: https://s3.amazonaws.com/my-bucket/hyperpod-quickstart/modules
+
+Mappings:
+  ClusterSizeMap:
+    small:
+      WorkerCount: "2"
+      FSxCapacity: "1200"
+      EBSVolume: "500"
+    medium:
+      WorkerCount: "8"
+      FSxCapacity: "4800"
+      EBSVolume: "500"
+    large:
+      WorkerCount: "32"
+      FSxCapacity: "14400"
+      EBSVolume: "1000"
+
+Conditions:
+  ObservabilityEnabled: !Equals [!Ref EnableObservability, "true"]
+  ValidationEnabled: !Equals [!Ref EnableValidation, "true"]
+  BenchmarksEnabled: !Equals [!Ref RunBenchmarks, "true"]
+
+Resources:
+
+  # =========================================================================
+  # Networking
+  # =========================================================================
+  NetworkingStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/networking/template.yaml"
+      Parameters:
+        ResourceNamePrefix: !Ref ClusterName
+        PrimaryAZ: !Ref AvailabilityZoneId
+
+  # =========================================================================
+  # Security
+  # =========================================================================
+  SecurityStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/security/template.yaml"
+      Parameters:
+        ResourceNamePrefix: !Ref ClusterName
+        VpcId: !GetAtt NetworkingStack.Outputs.VpcId
+
+  # =========================================================================
+  # Storage - FSx Lustre
+  # =========================================================================
+  StorageStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/storage/fsx-lustre.yaml"
+      Parameters:
+        ResourceNamePrefix: !Ref ClusterName
+        SubnetId: !GetAtt NetworkingStack.Outputs.PrivateSubnetId
+        SecurityGroupId: !GetAtt SecurityStack.Outputs.SecurityGroupId
+        StorageCapacityGiB: !FindInMap [ClusterSizeMap, !Ref ClusterSize, FSxCapacity]
+
+  # =========================================================================
+  # Storage - S3 Lifecycle Scripts Bucket
+  # =========================================================================
+  S3Stack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/storage/s3-lifecycle.yaml"
+      Parameters:
+        ResourceNamePrefix: !Ref ClusterName
+
+  # =========================================================================
+  # IAM
+  # =========================================================================
+  IAMStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/iam/template.yaml"
+      Parameters:
+        ResourceNamePrefix: !Ref ClusterName
+        LifecycleScriptsBucket: !GetAtt S3Stack.Outputs.BucketName
+        PrometheusWorkspaceArn: !If
+          - ObservabilityEnabled
+          - !GetAtt ObservabilityStack.Outputs.PrometheusWorkspaceArn
+          - ""
+
+  # =========================================================================
+  # HyperPod Cluster
+  # =========================================================================
+  HyperPodStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/hyperpod/cluster.yaml"
+      Parameters:
+        ResourceNamePrefix: !Ref ClusterName
+        ClusterName: !Ref ClusterName
+        Orchestrator: slurm
+        SecurityGroupId: !GetAtt SecurityStack.Outputs.SecurityGroupId
+        SubnetId: !GetAtt NetworkingStack.Outputs.PrivateSubnetId
+        ExecutionRoleArn: !GetAtt IAMStack.Outputs.RoleArn
+        LifecycleS3Bucket: !GetAtt S3Stack.Outputs.BucketName
+        LifecycleS3KeyPrefix: lifecycle-scripts
+        WorkerInstanceGroupName: worker-group
+        WorkerInstanceType: !Ref WorkerInstanceType
+        WorkerInstanceCount: !FindInMap [ClusterSizeMap, !Ref ClusterSize, WorkerCount]
+        WorkerEBSVolumeSize: !FindInMap [ClusterSizeMap, !Ref ClusterSize, EBSVolume]
+        WorkerLifecycleScript: on_create.sh
+        CreateControllerGroup: "true"
+        ControllerInstanceType: !Ref ControllerInstanceType
+
+  # =========================================================================
+  # Observability (optional)
+  # =========================================================================
+  ObservabilityStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: ObservabilityEnabled
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/observability/gpu-observability.yaml"
+      Parameters:
+        ResourceNamePrefix: !Ref ClusterName
+
+  # =========================================================================
+  # Validation (optional)
+  # =========================================================================
+  ValidationStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: ValidationEnabled
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/validation/template.yaml"
+      Parameters:
+        ResourceNamePrefix: !Ref ClusterName
+        ClusterName: !GetAtt HyperPodStack.Outputs.ClusterName
+        ClusterArn: !GetAtt HyperPodStack.Outputs.ClusterArn
+        SubnetId: !GetAtt NetworkingStack.Outputs.PrivateSubnetId
+        SecurityGroupId: !GetAtt SecurityStack.Outputs.SecurityGroupId
+        ExpectedWorkerCount: !FindInMap [ClusterSizeMap, !Ref ClusterSize, WorkerCount]
+
+  # =========================================================================
+  # Benchmarking (optional)
+  # =========================================================================
+  BenchmarkStack:
+    Type: AWS::CloudFormation::Stack
+    Condition: BenchmarksEnabled
+    Properties:
+      TemplateURL: !Sub "${TemplateBaseUrl}/benchmarking/template.yaml"
+      Parameters:
+        ResourceNamePrefix: !Ref ClusterName
+        ClusterName: !GetAtt HyperPodStack.Outputs.ClusterName
+        ClusterArn: !GetAtt HyperPodStack.Outputs.ClusterArn
+        ResultsBucket: !GetAtt S3Stack.Outputs.BucketName
+        ComputeType: gpu
+        Orchestrator: slurm
+
+# =========================================================================
+# Outputs
+# =========================================================================
+Outputs:
+  ClusterArn:
+    Description: HyperPod cluster ARN
+    Value: !GetAtt HyperPodStack.Outputs.ClusterArn
+
+  ClusterName:
+    Description: HyperPod cluster name
+    Value: !GetAtt HyperPodStack.Outputs.ClusterName
+
+  VpcId:
+    Description: VPC ID
+    Value: !GetAtt NetworkingStack.Outputs.VpcId
+
+  PrivateSubnetId:
+    Description: Private subnet ID
+    Value: !GetAtt NetworkingStack.Outputs.PrivateSubnetId
+
+  FSxDnsName:
+    Description: FSx Lustre filesystem DNS name
+    Value: !GetAtt StorageStack.Outputs.FileSystemDnsName
+
+  FSxMountName:
+    Description: FSx Lustre mount name
+    Value: !GetAtt StorageStack.Outputs.MountName
+
+  LifecycleScriptsBucket:
+    Description: S3 bucket for lifecycle scripts
+    Value: !GetAtt S3Stack.Outputs.BucketName
+
+  GrafanaDashboardUrl:
+    Condition: ObservabilityEnabled
+    Description: Grafana dashboard URL
+    Value: !GetAtt ObservabilityStack.Outputs.GrafanaWorkspaceUrl
+
+  PrometheusEndpoint:
+    Condition: ObservabilityEnabled
+    Description: Prometheus remote write endpoint
+    Value: !GetAtt ObservabilityStack.Outputs.PrometheusEndpoint
+
+  ValidationResult:
+    Condition: ValidationEnabled
+    Description: Post-deploy validation result
+    Value: !GetAtt ValidationStack.Outputs.ValidationResult
+
+  BenchmarkResults:
+    Condition: BenchmarksEnabled
+    Description: S3 path to benchmark results
+    Value: !GetAtt BenchmarkStack.Outputs.ResultsS3Path

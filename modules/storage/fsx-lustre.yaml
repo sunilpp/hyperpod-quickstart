@@ -1,0 +1,63 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  FSx for Lustre filesystem for SageMaker HyperPod clusters.
+  Provides high-performance shared storage for training data, model
+  checkpoints, and shared environments across all cluster nodes.
+
+Parameters:
+  ResourceNamePrefix:
+    Type: String
+    Default: hyperpod
+    Description: Prefix applied to resource names.
+
+  SubnetId:
+    Type: String
+    Description: Private subnet ID where FSx will be deployed.
+
+  SecurityGroupId:
+    Type: String
+    Description: Security group ID for FSx network interfaces.
+
+  StorageCapacityGiB:
+    Type: Number
+    Default: 1200
+    Description: Storage capacity in GiB (1200 or increments of 2400).
+
+  PerUnitStorageThroughput:
+    Type: Number
+    Default: 250
+    AllowedValues: [125, 250, 500, 1000]
+    Description: Provisioned throughput in MB/s per TiB of storage.
+
+Resources:
+  LustreFileSystem:
+    Type: AWS::FSx::FileSystem
+    DeletionPolicy: Delete
+    Properties:
+      FileSystemType: LUSTRE
+      StorageType: SSD
+      StorageCapacity: !Ref StorageCapacityGiB
+      SubnetIds:
+        - !Ref SubnetId
+      SecurityGroupIds:
+        - !Ref SecurityGroupId
+      LustreConfiguration:
+        DeploymentType: PERSISTENT_2
+        PerUnitStorageThroughput: !Ref PerUnitStorageThroughput
+        DataCompressionType: LZ4
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourceNamePrefix}-fsx-lustre"
+
+Outputs:
+  FileSystemId:
+    Description: FSx for Lustre filesystem ID
+    Value: !Ref LustreFileSystem
+
+  FileSystemDnsName:
+    Description: DNS name for mounting the filesystem
+    Value: !Sub "${LustreFileSystem}.fsx.${AWS::Region}.amazonaws.com"
+
+  MountName:
+    Description: Lustre mount name
+    Value: !GetAtt LustreFileSystem.LustreMountName

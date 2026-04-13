@@ -1,0 +1,70 @@
+{
+  "dashboard": {
+    "uid": "hyperpod-neuron-utilization",
+    "title": "HyperPod NeuronCore Utilization",
+    "description": "AWS Trainium/Inferentia metrics via Neuron Monitor",
+    "tags": ["hyperpod", "trainium", "neuron"],
+    "timezone": "browser",
+    "refresh": "30s",
+    "time": { "from": "now-1h", "to": "now" },
+    "templating": {
+      "list": [
+        {
+          "name": "datasource",
+          "type": "datasource",
+          "query": "prometheus"
+        },
+        {
+          "name": "instance",
+          "type": "query",
+          "datasource": { "uid": "${datasource}" },
+          "query": "label_values(neuron_runtime_vcore_usage, instance)",
+          "multi": true,
+          "includeAll": true
+        }
+      ]
+    },
+    "panels": [
+      {
+        "id": 1,
+        "title": "NeuronCore Utilization %",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+        "targets": [{ "expr": "neuron_runtime_vcore_usage{instance=~\"$instance\"}", "legendFormat": "{{ instance }} core{{ neuroncore }}" }],
+        "fieldConfig": { "defaults": { "unit": "percent", "min": 0, "max": 100 } }
+      },
+      {
+        "id": 2,
+        "title": "HBM Memory Usage",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+        "targets": [{ "expr": "neuroncore_memory_usage_model_shared_scratchpad{instance=~\"$instance\"}", "legendFormat": "{{ instance }} core{{ neuroncore }}" }],
+        "fieldConfig": { "defaults": { "unit": "bytes" } }
+      },
+      {
+        "id": 3,
+        "title": "Neuron Execution Latency",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+        "targets": [{ "expr": "rate(neuron_execution_latency_seconds_sum[5m]) / rate(neuron_execution_latency_seconds_count[5m])", "legendFormat": "{{ instance }}" }],
+        "fieldConfig": { "defaults": { "unit": "s" } }
+      },
+      {
+        "id": 4,
+        "title": "Collective Communication Ops",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+        "targets": [{ "expr": "rate(neuron_cc_ops_total[5m])", "legendFormat": "{{ instance }} {{ op }}" }],
+        "fieldConfig": { "defaults": { "unit": "ops" } }
+      },
+      {
+        "id": 5,
+        "title": "Neuron Device Power",
+        "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+        "targets": [{ "expr": "neuron_hardware_power{instance=~\"$instance\"}", "legendFormat": "{{ instance }} device{{ neuron_device }}" }],
+        "fieldConfig": { "defaults": { "unit": "watt" } }
+      }
+    ]
+  }
+}

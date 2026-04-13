@@ -1,0 +1,140 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Observability stack for Trainium-based HyperPod clusters.
+  Creates AMP and AMG workspaces with Neuron-specific alert rules.
+
+Parameters:
+  ResourceNamePrefix:
+    Type: String
+    Default: hyperpod
+
+
+Resources:
+
+  # -------------------------------------------------------------------------
+  # Amazon Managed Prometheus
+  # -------------------------------------------------------------------------
+  PrometheusWorkspace:
+    Type: AWS::APS::Workspace
+    Properties:
+      Alias: !Sub "${ResourceNamePrefix}-prometheus"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourceNamePrefix}-prometheus"
+
+  # Alert rules for Trainium clusters (Neuron metrics)
+  PrometheusAlertRules:
+    Type: AWS::APS::RuleGroupsNamespace
+    Properties:
+      Workspace: !GetAtt PrometheusWorkspace.Arn
+      Name: !Sub "${ResourceNamePrefix}-trainium-alerts"
+      Data: |
+        groups:
+          - name: hyperpod-trainium-alerts
+            rules:
+              - alert: NeuronCoreUnderutilized
+                expr: avg(neuron_runtime_vcore_usage) < 10
+                for: 30m
+                labels:
+                  severity: warning
+                annotations:
+                  summary: "NeuronCore utilization below 10% for 30 minutes"
+                  description: "Average NeuronCore utilization is {{ $value }}%."
+
+              - alert: NeuronHBMUsageHigh
+                expr: neuroncore_memory_usage_model_shared_scratchpad > 90
+                for: 10m
+                labels:
+                  severity: warning
+                annotations:
+                  summary: "NeuronCore HBM usage above 90%"
+                  description: "HBM memory usage is {{ $value }}%."
+
+              - alert: NeuronRuntimeErrors
+                expr: rate(neuron_runtime_error_total[5m]) > 0
+                for: 5m
+                labels:
+                  severity: critical
+                annotations:
+                  summary: "Neuron runtime errors detected"
+                  description: "Neuron runtime errors on {{ $labels.instance }}."
+
+              - alert: NodeDown
+                expr: up == 0
+                for: 5m
+                labels:
+                  severity: critical
+                annotations:
+                  summary: "Node unreachable for 5 minutes"
+
+              - alert: EFAErrors
+                expr: rate(efa_rdma_read_errors_total[5m]) > 0
+                for: 5m
+                labels:
+                  severity: warning
+                annotations:
+                  summary: "EFA RDMA errors detected"
+
+              - alert: DiskUsageHigh
+                expr: (1 - node_filesystem_avail_bytes / node_filesystem_size_bytes) * 100 > 90
+                for: 10m
+                labels:
+                  severity: warning
+                annotations:
+                  summary: "Disk usage above 90%"
+
+  # -------------------------------------------------------------------------
+  # Amazon Managed Grafana
+  # -------------------------------------------------------------------------
+  GrafanaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourceNamePrefix}-grafana-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: grafana.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PrometheusAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - aps:QueryMetrics
+                  - aps:GetLabels
+                  - aps:GetSeries
+                  - aps:GetMetricMetadata
+                  - aps:ListWorkspaces
+                  - aps:DescribeWorkspace
+                Resource: "*"
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonGrafanaCloudWatchAccess"
+
+  GrafanaWorkspace:
+    Type: AWS::Grafana::Workspace
+    Properties:
+      Name: !Sub "${ResourceNamePrefix}-grafana"
+      AccountAccessType: CURRENT_ACCOUNT
+      AuthenticationProviders:
+        - AWS_SSO
+      PermissionType: SERVICE_MANAGED
+      DataSources:
+        - PROMETHEUS
+        - CLOUDWATCH
+      RoleArn: !GetAtt GrafanaRole.Arn
+
+Outputs:
+  PrometheusWorkspaceId:
+    Value: !GetAtt PrometheusWorkspace.WorkspaceId
+  PrometheusEndpoint:
+    Value: !GetAtt PrometheusWorkspace.PrometheusEndpoint
+  PrometheusWorkspaceArn:
+    Value: !GetAtt PrometheusWorkspace.Arn
+  GrafanaWorkspaceId:
+    Value: !Ref GrafanaWorkspace
+  GrafanaWorkspaceUrl:
+    Value: !GetAtt GrafanaWorkspace.Endpoint
