@@ -45,13 +45,12 @@ if [[ ! -f "${TEMPLATE_DIR}/template.yaml" ]]; then
 fi
 
 # ── Default stack names per variant ─────────────────────────────────
-declare -A DEFAULT_NAMES=(
-  [slurm-gpu]="my-hyperpod"
-  [slurm-trainium]="my-hyperpod-trn"
-  [eks-gpu]="my-hyperpod-eks"
-  [eks-trainium]="my-hyperpod-eks-trn"
-)
-STACK_NAME="${DEFAULT_NAMES[$STACK_VARIANT]}"
+case "${STACK_VARIANT}" in
+  slurm-gpu)       STACK_NAME="my-hyperpod" ;;
+  slurm-trainium)  STACK_NAME="my-hyperpod-trn" ;;
+  eks-gpu)         STACK_NAME="my-hyperpod-eks" ;;
+  eks-trainium)    STACK_NAME="my-hyperpod-eks-trn" ;;
+esac
 
 # ── Package templates ───────────────────────────────────────────────
 PACKAGED_FILE="${REPO_ROOT}/packaged.yaml"
