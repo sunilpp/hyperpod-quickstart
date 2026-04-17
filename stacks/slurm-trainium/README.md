@@ -16,10 +16,29 @@ Deploys a SageMaker HyperPod cluster with Slurm orchestrator and AWS Trainium in
 
 ## Deploy
 
+### Recommended: Launch script
+
+From the repo root, run:
+
 ```bash
+./scripts/deploy.sh slurm-trainium YOUR_S3_BUCKET us-west-2
+```
+
+This packages nested templates, uploads to S3, and opens the CloudFormation console with everything pre-filled.
+
+### Via AWS CLI
+
+```bash
+# Package nested templates (required)
+aws cloudformation package \
+  --template-file template.yaml \
+  --s3-bucket YOUR_S3_BUCKET \
+  --output-template-file packaged.yaml
+
+# Deploy
 aws cloudformation create-stack \
   --stack-name my-hyperpod-trn \
-  --template-body file://template.yaml \
+  --template-body file://packaged.yaml \
   --parameters file://params/small.json \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-west-2
