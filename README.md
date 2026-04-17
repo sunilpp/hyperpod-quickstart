@@ -15,6 +15,8 @@ Pick the combination that matches your team and workload:
 | **Amazon EKS** | [![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](#eks-gpu) | [![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](#eks-trainium) |
 | **Slurm** | [![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](#slurm-gpu) | [![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](#slurm-trainium) |
 
+> **One-command launch:** Run `./scripts/deploy.sh <variant> <s3-bucket> [region]` to package templates, upload to S3, and open the CloudFormation console with everything pre-filled. See [Quick Start](#quick-start) below.
+
 > **Not sure which to pick?** Read the [Choosing Your Stack](docs/02-choosing-your-stack.md) guide.
 >
 > **Quick rule of thumb:**
@@ -74,11 +76,22 @@ That's it. No CLI tools, no local setup required.
 
 ### 1. Launch the stack
 
-Click the "Launch Stack" button above for your chosen configuration, or:
+The fastest way to deploy is the launch script, which packages templates, uploads them to S3, and opens the CloudFormation console with everything pre-filled so you can review parameters and click **Create stack**:
 
 ```bash
-# Replace STACK_VARIANT with: eks-gpu, eks-trainium, slurm-gpu, or slurm-trainium
+# Create an S3 bucket for templates (one-time setup)
+aws s3 mb s3://YOUR_S3_BUCKET --region us-west-2
 
+# Launch — opens CloudFormation console in your browser
+./scripts/deploy.sh slurm-gpu YOUR_S3_BUCKET us-west-2
+```
+
+The script supports all four variants: `slurm-gpu`, `slurm-trainium`, `eks-gpu`, `eks-trainium`.
+
+<details>
+<summary><b>Alternative: Manual CLI deployment</b></summary>
+
+```bash
 # Step 1: Package (uploads nested templates to S3)
 aws cloudformation package \
   --template-file stacks/STACK_VARIANT/template.yaml \
@@ -93,10 +106,7 @@ aws cloudformation create-stack \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-west-2
 ```
-
-> **Note:** The `package` step is required because this project uses nested CloudFormation stacks.
-> You need an S3 bucket to host the templates — create one with
-> `aws s3 mb s3://YOUR_S3_BUCKET --region us-west-2` if you don't have one.
+</details>
 
 ### 2. Configure parameters
 
@@ -186,6 +196,7 @@ hyperpod-quickstart/
 │   ├── observability/          #   Prometheus, Grafana, dashboards
 │   ├── validation/             #   Post-deploy health checks
 │   └── benchmarking/           #   NCCL/NCCOM performance tests
+├── scripts/                    # Deploy helper (packages + opens CF console)
 ├── lifecycle-scripts/          # Node initialization scripts
 ├── lambda/                     # Custom resource Lambda functions
 ├── examples/                   # Sample training job submissions

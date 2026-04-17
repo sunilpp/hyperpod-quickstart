@@ -93,9 +93,24 @@ If the status shows **ROLLBACK_IN_PROGRESS** or **CREATE_FAILED**, see the [Trou
 
 ---
 
-## Option B: Deploy via the AWS CLI
+## Option B: Deploy via the Launch Script (recommended)
 
-If you prefer the command line, you can deploy using the AWS CLI.
+The launch script packages nested templates, uploads them to S3, and opens the CloudFormation console in your browser with the template and stack name pre-filled. You review the parameters and click **Create stack**.
+
+```bash
+# Create an S3 bucket for templates (one-time setup)
+BUCKET_NAME="my-hyperpod-templates-$(aws sts get-caller-identity --query Account --output text)"
+aws s3 mb s3://$BUCKET_NAME --region us-west-2
+
+# Package, upload, and open the CloudFormation console
+./scripts/deploy.sh slurm-gpu $BUCKET_NAME us-west-2
+```
+
+The script supports all four variants: `slurm-gpu`, `slurm-trainium`, `eks-gpu`, `eks-trainium`.
+
+## Option C: Deploy via the AWS CLI (manual)
+
+If you prefer full CLI control without the browser, you can package and deploy manually.
 
 ### Step 1: Package the Templates
 
