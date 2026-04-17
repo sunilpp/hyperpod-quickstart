@@ -44,7 +44,6 @@ aws cloudformation update-stack \
     ParameterKey=EnableObservability,UsePreviousValue=true \
     ParameterKey=EnableValidation,UsePreviousValue=true \
     ParameterKey=RunBenchmarks,UsePreviousValue=true \
-    ParameterKey=TemplateBaseUrl,UsePreviousValue=true \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-west-2
 ```
@@ -95,7 +94,6 @@ aws cloudformation update-stack \
     ParameterKey=ClusterSize,UsePreviousValue=true \
     ParameterKey=WorkerInstanceType,ParameterValue=ml.p4d.24xlarge \
     ParameterKey=AvailabilityZoneId,UsePreviousValue=true \
-    ParameterKey=TemplateBaseUrl,UsePreviousValue=true \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-west-2
 ```
@@ -139,7 +137,6 @@ aws cloudformation update-stack \
     ParameterKey=ClusterSize,UsePreviousValue=true \
     ParameterKey=AvailabilityZoneId,UsePreviousValue=true \
     ParameterKey=RunBenchmarks,ParameterValue=true \
-    ParameterKey=TemplateBaseUrl,UsePreviousValue=true \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-west-2
 ```
@@ -155,7 +152,6 @@ aws cloudformation update-stack \
     ParameterKey=ClusterSize,UsePreviousValue=true \
     ParameterKey=AvailabilityZoneId,UsePreviousValue=true \
     ParameterKey=EnableObservability,ParameterValue=false \
-    ParameterKey=TemplateBaseUrl,UsePreviousValue=true \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-west-2
 ```

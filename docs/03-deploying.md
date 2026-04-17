@@ -27,16 +27,19 @@ Go to the [AWS CloudFormation console](https://console.aws.amazon.com/cloudforma
 
 ### Step 2: Create a New Stack
 
-1. Choose **Create stack** > **With new resources (standard)**
-2. Under **Specify template**, select **Upload a template file**
-3. Upload the template file for your chosen stack:
-   - `stacks/eks-gpu/template.yaml`
-   - `stacks/eks-trainium/template.yaml`
-   - `stacks/slurm-gpu/template.yaml`
-   - `stacks/slurm-trainium/template.yaml`
-4. Choose **Next**
+1. First, package the template using the CLI (this uploads nested templates to S3):
+   ```bash
+   aws cloudformation package \
+     --template-file stacks/STACK_VARIANT/template.yaml \
+     --s3-bucket YOUR_S3_BUCKET \
+     --output-template-file packaged.yaml
+   ```
+2. Choose **Create stack** > **With new resources (standard)**
+3. Under **Specify template**, select **Upload a template file**
+4. Upload the **packaged.yaml** file generated in step 1
+5. Choose **Next**
 
-> **Tip:** Alternatively, if the templates are hosted in an S3 bucket, you can paste the S3 URL directly using the **Amazon S3 URL** option.
+> **Note:** You must use the packaged template because this project uses nested stacks. The raw template files contain relative paths that CloudFormation cannot resolve directly.
 
 ### Step 3: Configure Stack Parameters
 
@@ -65,14 +68,6 @@ Enter a **Stack name** (for example, `my-hyperpod-cluster`), then fill in the pa
 | **EnableObservability** | Set to `true` to deploy Prometheus + Grafana dashboards. | `true` |
 | **EnableValidation** | Set to `true` to run automatic health checks after deployment. | `true` |
 | **RunBenchmarks** | Set to `true` to run NCCL/NCCOM network performance benchmarks. | `false` |
-
-#### Template Location
-
-| Parameter | What to Enter | Default |
-|-----------|---------------|---------|
-| **TemplateBaseUrl** | S3 URL prefix where nested stack templates are stored. | (leave empty if templates are bundled) |
-
-> **Warning:** The `TemplateBaseUrl` parameter is required when deploying nested stacks from S3. If you are uploading templates from a packaged deployment, this should be pre-filled. If you are deploying from a local clone, you need to first upload the `modules/` directory to S3 and provide that URL.
 
 ### Step 4: Configure Stack Options
 
@@ -104,27 +99,27 @@ If you prefer the command line, you can deploy using the AWS CLI.
 
 ### Step 1: Package the Templates
 
-Because this project uses nested CloudFormation stacks (templates that reference other templates), you need to upload all template files to an S3 bucket first.
+Because this project uses nested CloudFormation stacks, you need to package the templates first. The `aws cloudformation package` command automatically uploads nested templates to S3.
 
 ```bash
 # Create an S3 bucket for templates (one-time setup)
 BUCKET_NAME="my-hyperpod-templates-$(aws sts get-caller-identity --query Account --output text)"
 aws s3 mb s3://$BUCKET_NAME --region us-west-2
 
-# Upload all module templates
-aws s3 sync modules/ s3://$BUCKET_NAME/modules/ --region us-west-2
+# Package the templates (replace STACK_VARIANT with your choice)
+# Options: slurm-gpu, slurm-trainium, eks-gpu, eks-trainium
+aws cloudformation package \
+  --template-file stacks/STACK_VARIANT/template.yaml \
+  --s3-bucket $BUCKET_NAME \
+  --output-template-file packaged.yaml
 ```
 
 ### Step 2: Deploy the Stack
 
-Choose the command for your stack variant:
-
-**Slurm + GPU:**
-
 ```bash
 aws cloudformation create-stack \
   --stack-name my-hyperpod-cluster \
-  --template-body file://stacks/slurm-gpu/template.yaml \
+  --template-body file://packaged.yaml \
   --parameters \
     ParameterKey=ClusterName,ParameterValue=my-hyperpod \
     ParameterKey=ClusterSize,ParameterValue=small \
@@ -132,52 +127,6 @@ aws cloudformation create-stack \
     ParameterKey=EnableObservability,ParameterValue=true \
     ParameterKey=EnableValidation,ParameterValue=true \
     ParameterKey=RunBenchmarks,ParameterValue=false \
-    ParameterKey=TemplateBaseUrl,ParameterValue=https://s3.amazonaws.com/$BUCKET_NAME/modules \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --region us-west-2
-```
-
-**Slurm + Trainium:**
-
-```bash
-aws cloudformation create-stack \
-  --stack-name my-hyperpod-cluster \
-  --template-body file://stacks/slurm-trainium/template.yaml \
-  --parameters \
-    ParameterKey=ClusterName,ParameterValue=my-hyperpod \
-    ParameterKey=ClusterSize,ParameterValue=small \
-    ParameterKey=AvailabilityZoneId,ParameterValue=usw2-az2 \
-    ParameterKey=TemplateBaseUrl,ParameterValue=https://s3.amazonaws.com/$BUCKET_NAME/modules \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --region us-west-2
-```
-
-**EKS + GPU:**
-
-```bash
-aws cloudformation create-stack \
-  --stack-name my-hyperpod-cluster \
-  --template-body file://stacks/eks-gpu/template.yaml \
-  --parameters \
-    ParameterKey=ClusterName,ParameterValue=my-hyperpod-eks \
-    ParameterKey=ClusterSize,ParameterValue=small \
-    ParameterKey=AvailabilityZoneId,ParameterValue=usw2-az2 \
-    ParameterKey=TemplateBaseUrl,ParameterValue=https://s3.amazonaws.com/$BUCKET_NAME/modules \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --region us-west-2
-```
-
-**EKS + Trainium:**
-
-```bash
-aws cloudformation create-stack \
-  --stack-name my-hyperpod-cluster \
-  --template-body file://stacks/eks-trainium/template.yaml \
-  --parameters \
-    ParameterKey=ClusterName,ParameterValue=my-hyperpod-eks \
-    ParameterKey=ClusterSize,ParameterValue=small \
-    ParameterKey=AvailabilityZoneId,ParameterValue=usw2-az2 \
-    ParameterKey=TemplateBaseUrl,ParameterValue=https://s3.amazonaws.com/$BUCKET_NAME/modules \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-west-2
 ```
@@ -187,7 +136,7 @@ aws cloudformation create-stack \
 ```bash
 aws cloudformation create-stack \
   --stack-name my-hyperpod-cluster \
-  --template-body file://stacks/slurm-gpu/template.yaml \
+  --template-body file://packaged.yaml \
   --parameters file://stacks/slurm-gpu/params/small.json \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-west-2

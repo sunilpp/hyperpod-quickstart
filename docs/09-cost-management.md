@@ -141,7 +141,6 @@ aws cloudformation update-stack \
     ParameterKey=ClusterName,UsePreviousValue=true \
     ParameterKey=ClusterSize,UsePreviousValue=true \
     ParameterKey=AvailabilityZoneId,UsePreviousValue=true \
-    ParameterKey=TemplateBaseUrl,UsePreviousValue=true \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-west-2
 ```

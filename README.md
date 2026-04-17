@@ -77,14 +77,26 @@ That's it. No CLI tools, no local setup required.
 Click the "Launch Stack" button above for your chosen configuration, or:
 
 ```bash
-# Using AWS CLI (replace STACK_VARIANT with: eks-gpu, eks-trainium, slurm-gpu, or slurm-trainium)
+# Replace STACK_VARIANT with: eks-gpu, eks-trainium, slurm-gpu, or slurm-trainium
+
+# Step 1: Package (uploads nested templates to S3)
+aws cloudformation package \
+  --template-file stacks/STACK_VARIANT/template.yaml \
+  --s3-bucket YOUR_S3_BUCKET \
+  --output-template-file packaged.yaml
+
+# Step 2: Deploy the packaged template
 aws cloudformation create-stack \
   --stack-name my-hyperpod-cluster \
-  --template-body file://stacks/STACK_VARIANT/template.yaml \
+  --template-body file://packaged.yaml \
   --parameters file://stacks/STACK_VARIANT/params/small.json \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-west-2
 ```
+
+> **Note:** The `package` step is required because this project uses nested CloudFormation stacks.
+> You need an S3 bucket to host the templates — create one with
+> `aws s3 mb s3://YOUR_S3_BUCKET --region us-west-2` if you don't have one.
 
 ### 2. Configure parameters
 

@@ -24,10 +24,6 @@ Metadata:
           - EnableObservability
           - EnableValidation
           - RunBenchmarks
-      - Label:
-          default: Template Location
-        Parameters:
-          - TemplateBaseUrl
 
 Parameters:
   ClusterName:
@@ -82,10 +78,6 @@ Parameters:
     Default: "false"
     AllowedValues: ["true", "false"]
 
-  TemplateBaseUrl:
-    Type: String
-    Default: ""
-
 Mappings:
   ClusterSizeMap:
     small:
@@ -111,7 +103,7 @@ Resources:
   NetworkingStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: !Sub "${TemplateBaseUrl}/networking/template.yaml"
+      TemplateURL: ../../modules/networking/template.yaml
       Parameters:
         ResourceNamePrefix: !Ref ClusterName
         PrimaryAZ: !Ref AvailabilityZoneId
@@ -119,7 +111,7 @@ Resources:
   SecurityStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: !Sub "${TemplateBaseUrl}/security/template.yaml"
+      TemplateURL: ../../modules/security/template.yaml
       Parameters:
         ResourceNamePrefix: !Ref ClusterName
         VpcId: !GetAtt NetworkingStack.Outputs.VpcId
@@ -127,7 +119,7 @@ Resources:
   EKSStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: !Sub "${TemplateBaseUrl}/eks/cluster.yaml"
+      TemplateURL: ../../modules/eks/cluster.yaml
       Parameters:
         ResourceNamePrefix: !Ref ClusterName
         VpcId: !GetAtt NetworkingStack.Outputs.VpcId
@@ -140,7 +132,7 @@ Resources:
   EKSAddonsStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: !Sub "${TemplateBaseUrl}/eks/addons.yaml"
+      TemplateURL: ../../modules/eks/addons.yaml
       Parameters:
         ResourceNamePrefix: !Ref ClusterName
         ClusterName: !GetAtt EKSStack.Outputs.ClusterName
@@ -148,7 +140,7 @@ Resources:
   StorageStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: !Sub "${TemplateBaseUrl}/storage/fsx-lustre.yaml"
+      TemplateURL: ../../modules/storage/fsx-lustre.yaml
       Parameters:
         ResourceNamePrefix: !Ref ClusterName
         SubnetId: !GetAtt NetworkingStack.Outputs.PrivateSubnetId
@@ -158,14 +150,14 @@ Resources:
   S3Stack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: !Sub "${TemplateBaseUrl}/storage/s3-lifecycle.yaml"
+      TemplateURL: ../../modules/storage/s3-lifecycle.yaml
       Parameters:
         ResourceNamePrefix: !Ref ClusterName
 
   IAMStack:
     Type: AWS::CloudFormation::Stack
     Properties:
-      TemplateURL: !Sub "${TemplateBaseUrl}/iam/template.yaml"
+      TemplateURL: ../../modules/iam/template.yaml
       Parameters:
         ResourceNamePrefix: !Ref ClusterName
         LifecycleScriptsBucket: !GetAtt S3Stack.Outputs.BucketName
@@ -190,7 +182,7 @@ Resources:
     Type: AWS::CloudFormation::Stack
     DependsOn: EKSAddonsStack
     Properties:
-      TemplateURL: !Sub "${TemplateBaseUrl}/hyperpod/cluster.yaml"
+      TemplateURL: ../../modules/hyperpod/cluster.yaml
       Parameters:
         ResourceNamePrefix: !Ref ClusterName
         ClusterName: !Ref ClusterName
@@ -212,7 +204,7 @@ Resources:
     Type: AWS::CloudFormation::Stack
     Condition: ObservabilityEnabled
     Properties:
-      TemplateURL: !Sub "${TemplateBaseUrl}/observability/trainium-observability.yaml"
+      TemplateURL: ../../modules/observability/trainium-observability.yaml
       Parameters:
         ResourceNamePrefix: !Ref ClusterName
 
@@ -220,7 +212,7 @@ Resources:
     Type: AWS::CloudFormation::Stack
     Condition: ValidationEnabled
     Properties:
-      TemplateURL: !Sub "${TemplateBaseUrl}/validation/template.yaml"
+      TemplateURL: ../../modules/validation/template.yaml
       Parameters:
         ResourceNamePrefix: !Ref ClusterName
         ClusterName: !GetAtt HyperPodStack.Outputs.ClusterName
@@ -233,7 +225,7 @@ Resources:
     Type: AWS::CloudFormation::Stack
     Condition: BenchmarksEnabled
     Properties:
-      TemplateURL: !Sub "${TemplateBaseUrl}/benchmarking/template.yaml"
+      TemplateURL: ../../modules/benchmarking/template.yaml
       Parameters:
         ResourceNamePrefix: !Ref ClusterName
         ClusterName: !GetAtt HyperPodStack.Outputs.ClusterName

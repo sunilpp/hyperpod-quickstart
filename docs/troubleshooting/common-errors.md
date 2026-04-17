@@ -44,7 +44,7 @@ aws cloudformation wait stack-delete-complete --stack-name my-hyperpod-cluster -
 # Redeploy
 aws cloudformation create-stack \
   --stack-name my-hyperpod-cluster \
-  --template-body file://stacks/slurm-gpu/template.yaml \
+  --template-body file://packaged.yaml \
   --parameters file://stacks/slurm-gpu/params/small.json \
   --capabilities CAPABILITY_NAMED_IAM \
   --region us-west-2
@@ -85,7 +85,7 @@ aws cloudformation create-stack \
    ```bash
    aws cloudformation create-stack \
      --stack-name my-hyperpod-cluster \
-     --template-body file://stacks/slurm-gpu/template.yaml \
+     --template-body file://packaged.yaml \
      --parameters \
        ParameterKey=ClusterName,ParameterValue=my-hyperpod \
        ParameterKey=ClusterSize,ParameterValue=small \
@@ -389,21 +389,25 @@ For least-privilege, ensure these IAM actions at minimum:
 - Stack fails immediately on the first nested stack
 - Status reason references an invalid or unreachable template URL
 
-**Cause:** The nested stack templates are not uploaded to S3, or the `TemplateBaseUrl` parameter is incorrect.
+**Cause:** The templates were not packaged before deployment. Nested stack templates must be uploaded to S3 first.
 
 **Fix:**
 
-1. Upload the module templates to S3:
-   ```bash
-   aws s3 sync modules/ s3://<your-bucket>/modules/ --region us-west-2
-   ```
+Use `aws cloudformation package` to upload nested templates to S3 before deploying:
 
-2. Set `TemplateBaseUrl` to the correct S3 URL:
-   ```
-   https://s3.amazonaws.com/<your-bucket>/modules
-   ```
+```bash
+aws cloudformation package \
+  --template-file stacks/STACK_VARIANT/template.yaml \
+  --s3-bucket YOUR_S3_BUCKET \
+  --output-template-file packaged.yaml
 
-> **Tip:** Make sure the S3 URL does not end with a trailing slash. The template appends paths like `/networking/template.yaml` to the base URL.
+aws cloudformation create-stack \
+  --stack-name my-hyperpod-cluster \
+  --template-body file://packaged.yaml \
+  --parameters file://stacks/STACK_VARIANT/params/small.json \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --region us-west-2
+```
 
 ---
 
