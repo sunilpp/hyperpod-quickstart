@@ -28,12 +28,37 @@ log "=========================================="
 # Mount FSx Lustre (if configured)
 # -------------------------------------------------------------------------
 PROVISIONING_PARAMS="/opt/ml/config/provisioning_parameters.json"
+RESOURCE_CONFIG="/opt/ml/config/resource_config.json"
 FSX_DNS=""
 FSX_MOUNT=""
 
 if [[ -f "$PROVISIONING_PARAMS" ]]; then
     FSX_DNS=$(jq -r '.fsx_dns_name // empty' "$PROVISIONING_PARAMS" 2>/dev/null || true)
     FSX_MOUNT=$(jq -r '.fsx_mountname // empty' "$PROVISIONING_PARAMS" 2>/dev/null || true)
+fi
+
+# Auto-discover FSx if not in provisioning params
+if [[ -z "$FSX_DNS" || "$FSX_DNS" == *"PLACEHOLDER"* ]]; then
+    log "Auto-discovering FSx..."
+    CLUSTER_PREFIX=$(jq -r '.ClusterConfig.ClusterName // empty' "$RESOURCE_CONFIG" 2>/dev/null || true)
+    CLUSTER_PREFIX="${CLUSTER_PREFIX%%-slurm}"
+    CLUSTER_PREFIX="${CLUSTER_PREFIX%%-eks}"
+
+    if [[ -n "$CLUSTER_PREFIX" ]]; then
+        IMDS_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null || true)
+        REGION=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null || \
+                 curl -s http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null || true)
+        if [[ -n "$REGION" ]]; then
+            FSX_INFO=$(aws fsx describe-file-systems \
+                --query "FileSystems[?Tags[?Key=='Name' && contains(Value, '${CLUSTER_PREFIX}')]].{DNS:DNSName,Mount:LustreConfiguration.MountName}" \
+                --output json --region "$REGION" 2>/dev/null || true)
+            if [[ -n "$FSX_INFO" ]]; then
+                FSX_DNS=$(echo "$FSX_INFO" | jq -r '.[0].DNS // empty' 2>/dev/null || true)
+                FSX_MOUNT=$(echo "$FSX_INFO" | jq -r '.[0].Mount // empty' 2>/dev/null || true)
+                [[ -n "$FSX_DNS" ]] && log "Auto-discovered FSx: DNS=$FSX_DNS, Mount=$FSX_MOUNT"
+            fi
+        fi
+    fi
 fi
 
 if [[ -n "$FSX_DNS" && -n "$FSX_MOUNT" && "$FSX_DNS" != *"PLACEHOLDER"* ]]; then

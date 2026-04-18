@@ -121,12 +121,39 @@ PROVISIONING_PARAMS="/opt/ml/config/provisioning_parameters.json"
 FSX_DNS=""
 FSX_MOUNT=""
 
+# Try provisioning_parameters.json first
 if [[ -f "$PROVISIONING_PARAMS" ]]; then
     FSX_DNS=$(jq -r '.fsx_dns_name // empty' "$PROVISIONING_PARAMS" 2>/dev/null || true)
     FSX_MOUNT=$(jq -r '.fsx_mountname // empty' "$PROVISIONING_PARAMS" 2>/dev/null || true)
 fi
 
-# Skip FSx if values are empty or still have placeholders
+# Auto-discover FSx if not in provisioning params (or has placeholders)
+if [[ -z "$FSX_DNS" || "$FSX_DNS" == *"PLACEHOLDER"* ]]; then
+    log "Provisioning params missing FSx info — auto-discovering..."
+    CLUSTER_PREFIX=$(jq -r '.ClusterConfig.ClusterName // empty' "$RESOURCE_CONFIG" 2>/dev/null || true)
+    # Strip any suffix to get the resource prefix used for tagging
+    CLUSTER_PREFIX="${CLUSTER_PREFIX%%-slurm}"
+    CLUSTER_PREFIX="${CLUSTER_PREFIX%%-eks}"
+
+    if [[ -n "$CLUSTER_PREFIX" ]]; then
+        # Find FSx filesystem tagged with our cluster prefix
+        FSX_INFO=$(aws fsx describe-file-systems \
+            --query "FileSystems[?Tags[?Key=='Name' && contains(Value, '${CLUSTER_PREFIX}')]].{DNS:DNSName,Mount:LustreConfiguration.MountName}" \
+            --output json --region "$(curl -s http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null || \
+            curl -s -H "X-aws-ec2-metadata-token: $(curl -s -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')" \
+            http://169.254.169.254/latest/meta-data/placement/region)" 2>/dev/null || true)
+
+        if [[ -n "$FSX_INFO" ]]; then
+            FSX_DNS=$(echo "$FSX_INFO" | jq -r '.[0].DNS // empty' 2>/dev/null || true)
+            FSX_MOUNT=$(echo "$FSX_INFO" | jq -r '.[0].Mount // empty' 2>/dev/null || true)
+            if [[ -n "$FSX_DNS" ]]; then
+                log "Auto-discovered FSx: DNS=$FSX_DNS, Mount=$FSX_MOUNT"
+            fi
+        fi
+    fi
+fi
+
+# Mount if we have valid FSx info
 if [[ -n "$FSX_DNS" && -n "$FSX_MOUNT" && "$FSX_DNS" != *"PLACEHOLDER"* ]]; then
     MOUNT_POINT="/fsx"
     mkdir -p "$MOUNT_POINT"
