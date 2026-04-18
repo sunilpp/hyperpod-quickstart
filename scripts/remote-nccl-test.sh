@@ -2,21 +2,22 @@
 # remote-nccl-test.sh — Run NCCL benchmark remotely via SSM from your local machine.
 #
 # Usage:
-#   ./scripts/remote-nccl-test.sh <cluster-name> [num-nodes] [gpus-per-node] [region]
+#   ./scripts/remote-nccl-test.sh <cluster-name> <s3-bucket> [num-nodes] [gpus-per-node] [region]
 #
 # Examples:
-#   ./scripts/remote-nccl-test.sh my-hyperpod
-#   ./scripts/remote-nccl-test.sh my-hyperpod 2 1 us-west-2
+#   ./scripts/remote-nccl-test.sh my-hyperpod my-cfn-bucket
+#   ./scripts/remote-nccl-test.sh my-hyperpod my-cfn-bucket 2 1 us-west-2
 
 set -euo pipefail
 
 CLUSTER_NAME="${1:-}"
-NUM_NODES="${2:-2}"
-GPUS_PER_NODE="${3:-1}"
-REGION="${4:-us-west-2}"
+S3_BUCKET="${2:-}"
+NUM_NODES="${3:-2}"
+GPUS_PER_NODE="${4:-1}"
+REGION="${5:-us-west-2}"
 
-if [[ -z "$CLUSTER_NAME" ]]; then
-    echo "Usage: $0 <cluster-name> [num-nodes] [gpus-per-node] [region]"
+if [[ -z "$CLUSTER_NAME" || -z "$S3_BUCKET" ]]; then
+    echo "Usage: $0 <cluster-name> <s3-bucket> [num-nodes] [gpus-per-node] [region]"
     exit 1
 fi
 
@@ -42,55 +43,62 @@ if [[ -z "$CONTROLLER_ID" || "$CONTROLLER_ID" == "None" ]]; then
     exit 1
 fi
 echo "Controller: $CONTROLLER_ID"
+
+# ── Upload test script to S3 ──────────────────────────────────────
+S3_SCRIPT_PATH="s3://${S3_BUCKET}/hyperpod-quickstart/scripts/run-nccl-test.sh"
+echo "Uploading test script to $S3_SCRIPT_PATH..."
+aws s3 cp "$REPO_ROOT/scripts/run-nccl-test.sh" "$S3_SCRIPT_PATH" --region "$REGION"
+
+# ── Run via SSM ───────────────────────────────────────────────────
+echo "Executing NCCL test on controller (this may take several minutes)..."
 echo ""
 
-# ── Upload the test script to the controller via SSM ───────────────
-echo "Uploading NCCL test script..."
-SCRIPT_CONTENT=$(cat "$REPO_ROOT/scripts/run-nccl-test.sh")
-
-# Use SSM send-command to upload and run
 COMMAND_ID=$(aws ssm send-command \
     --instance-ids "$CONTROLLER_ID" \
     --document-name "AWS-RunShellScript" \
-    --parameters "commands=[
-        \"cat > /tmp/run-nccl-test.sh << 'SCRIPTEOF'\n${SCRIPT_CONTENT}\nSCRIPTEOF\",
+    --parameters "{\"commands\":[
+        \"aws s3 cp ${S3_SCRIPT_PATH} /tmp/run-nccl-test.sh --region ${REGION}\",
         \"chmod +x /tmp/run-nccl-test.sh\",
-        \"cd /tmp && /tmp/run-nccl-test.sh $NUM_NODES $GPUS_PER_NODE\"
-    ]" \
+        \"/tmp/run-nccl-test.sh ${NUM_NODES} ${GPUS_PER_NODE}\"
+    ],\"executionTimeout\":[\"600\"]}" \
     --timeout-seconds 600 \
     --region "$REGION" \
     --query 'Command.CommandId' \
-    --output text 2>/dev/null)
+    --output text)
 
 if [[ -z "$COMMAND_ID" || "$COMMAND_ID" == "None" ]]; then
-    echo "ERROR: Failed to send SSM command"
+    echo "ERROR: Failed to send SSM command."
     echo ""
-    echo "Falling back to interactive SSM session..."
-    echo "Run this on the controller:"
+    echo "Try running manually via SSM session:"
+    echo "  aws ssm start-session --target $CONTROLLER_ID --region $REGION"
     echo "  /tmp/run-nccl-test.sh $NUM_NODES $GPUS_PER_NODE"
-    echo ""
-    aws ssm start-session --target "$CONTROLLER_ID" --region "$REGION"
     exit 1
 fi
 
-echo "SSM Command ID: $COMMAND_ID"
-echo "Waiting for results (this may take a few minutes)..."
+echo "SSM Command: $COMMAND_ID"
+echo "Waiting for results..."
 echo ""
 
-# ── Wait for command to complete ───────────────────────────────────
-aws ssm wait command-executed \
-    --command-id "$COMMAND_ID" \
-    --instance-id "$CONTROLLER_ID" \
-    --region "$REGION" 2>/dev/null || true
+# ── Poll for completion ───────────────────────────────────────────
+while true; do
+    STATUS=$(aws ssm get-command-invocation \
+        --command-id "$COMMAND_ID" \
+        --instance-id "$CONTROLLER_ID" \
+        --region "$REGION" \
+        --query 'Status' \
+        --output text 2>/dev/null || echo "Pending")
 
-# ── Get the output ─────────────────────────────────────────────────
-STATUS=$(aws ssm get-command-invocation \
-    --command-id "$COMMAND_ID" \
-    --instance-id "$CONTROLLER_ID" \
-    --region "$REGION" \
-    --query 'Status' \
-    --output text 2>/dev/null)
+    case "$STATUS" in
+        Success|Failed|TimedOut|Cancelled)
+            break
+            ;;
+        *)
+            sleep 10
+            ;;
+    esac
+done
 
+# ── Get the output ────────────────────────────────────────────────
 echo "--- NCCL Test Output ---"
 echo ""
 
@@ -111,7 +119,7 @@ STDERR=$(aws ssm get-command-invocation \
 if [[ -n "$STDERR" && "$STDERR" != "None" ]]; then
     echo ""
     echo "--- Stderr ---"
-    echo "$STDERR"
+    echo "$STDERR" | tail -50
 fi
 
 echo ""
