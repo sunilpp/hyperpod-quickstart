@@ -36,7 +36,6 @@ Resources:
     Condition: CreateNewRole
     Properties:
       RoleName: !Sub "${ResourceNamePrefix}-execution-role"
-      Path: /hyperpod/
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
