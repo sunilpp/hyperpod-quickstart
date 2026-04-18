@@ -349,6 +349,62 @@ FI_EFA_USE_DEVICE_RDMA=1
 FI_EFA_FORK_SAFE=1
 NCCL_ENV
 
+# -------------------------------------------------------------------------
+# Install NCCL test sbatch script on controller
+# -------------------------------------------------------------------------
+if [[ "$NODE_TYPE" == "controller" ]]; then
+    log "--- Installing NCCL test scripts ---"
+
+    # Find the pre-built NCCL test binary path
+    NCCL_BINARY=""
+    for p in /usr/local/cuda-13.0/efa/test-cuda-13.0/all_reduce_perf \
+             /usr/local/cuda-12.9/efa/test-cuda-12.9/all_reduce_perf \
+             /opt/nccl-tests/build/all_reduce_perf; do
+        if [[ -x "$p" ]]; then
+            NCCL_BINARY="$p"
+            break
+        fi
+    done
+
+    NCCL_LIB_DIR=$(echo "$NCCL_BINARY" | grep -o '/usr/local/cuda-[0-9.]*' || echo "/usr/local/cuda")
+
+    cat > /opt/slurm/bin/run-nccl-test << NCCL_SCRIPT
+#!/bin/bash
+#SBATCH --job-name=nccl-test
+#SBATCH --exclusive
+#SBATCH --output=/tmp/nccl-test_%j.out
+#SBATCH --error=/tmp/nccl-test_%j.err
+
+NODES=\${1:-2}
+GPUS=\${2:-\$(nvidia-smi -L 2>/dev/null | wc -l || echo 1)}
+[[ "\$GPUS" -eq 0 ]] && GPUS=1
+TOTAL=\$((NODES * GPUS))
+BINARY="${NCCL_BINARY:-/opt/nccl-tests/build/all_reduce_perf}"
+LIB="${NCCL_LIB_DIR}/lib"
+
+echo "NCCL Test: \$NODES nodes, \$GPUS GPUs/node, \$TOTAL total"
+echo "Binary: \$BINARY"
+
+/opt/amazon/openmpi/bin/mpirun --allow-run-as-root \\
+    -np \$TOTAL -N \$GPUS --bind-to none \\
+    -x FI_PROVIDER=efa -x FI_EFA_FORK_SAFE=1 \\
+    -x LD_LIBRARY_PATH=\$LIB:/opt/amazon/efa/lib:/opt/amazon/openmpi/lib:/opt/amazon/ofi-nccl/lib:/usr/local/lib:/usr/lib \\
+    -x NCCL_DEBUG=INFO -x NCCL_BUFFSIZE=8388608 -x NCCL_P2P_NET_CHUNKSIZE=524288 \\
+    -x NCCL_SOCKET_IFNAME=^docker,lo,veth \\
+    --mca pml ^ucx --mca btl tcp,self --mca btl_tcp_if_exclude lo,docker0,veth_def_agent \\
+    \$BINARY -b 8 -e 16G -f 2 -g 1 -c 1 -n 100
+NCCL_SCRIPT
+    chmod +x /opt/slurm/bin/run-nccl-test
+
+    if [[ -n "$NCCL_BINARY" ]]; then
+        log "NCCL test ready: run-nccl-test [nodes] [gpus-per-node]"
+        log "  Example: run-nccl-test 2 1"
+        log "  Or: sbatch -N 2 run-nccl-test"
+    else
+        log "WARNING: NCCL test binary not found on this AMI"
+    fi
+fi
+
 log "=========================================="
 log "HyperPod Lifecycle Script Complete"
 log "Node type: $NODE_TYPE"
