@@ -52,7 +52,7 @@ Resources:
   HelmInstallerRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${ResourceNamePrefix}-helm-installer-role"
+      # Auto-generated name to avoid orphan conflicts on rollback
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -112,7 +112,7 @@ Resources:
     Type: AWS::Lambda::Function
     DependsOn: HelmInstallerAccessEntry
     Properties:
-      FunctionName: !Sub "${ResourceNamePrefix}-helm-installer"
+      # Auto-generated name to avoid orphan conflicts on rollback
       Runtime: python3.12
       Handler: lambda_function.lambda_handler
       Timeout: 600

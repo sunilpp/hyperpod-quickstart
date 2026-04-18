@@ -71,7 +71,7 @@ Resources:
   UploadFunctionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${ResourceNamePrefix}-lifecycle-upload-role"
+      # No RoleName — let CloudFormation auto-generate to avoid orphan conflicts
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -105,7 +105,7 @@ Resources:
   UploadFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub "${ResourceNamePrefix}-lifecycle-upload"
+      # No FunctionName — let CloudFormation auto-generate to avoid orphan conflicts
       Runtime: python3.12
       Handler: index.handler
       Timeout: 120

@@ -30,7 +30,7 @@ Resources:
   ValidationLambdaRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${ResourceNamePrefix}-validation-lambda-role"
+      # Auto-generated name to avoid orphan conflicts on rollback
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -63,7 +63,7 @@ Resources:
   ValidationFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub "${ResourceNamePrefix}-cluster-validation"
+      # Auto-generated name to avoid orphan conflicts on rollback
       Runtime: python3.12
       Handler: index.handler
       Timeout: 300
