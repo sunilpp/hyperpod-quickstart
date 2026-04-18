@@ -1,5 +1,4 @@
 #!/bin/bash
-set -euo pipefail
 
 # =============================================================================
 # HyperPod Lifecycle Script: Slurm + GPU
@@ -7,6 +6,10 @@ set -euo pipefail
 # This script runs on every node during HyperPod cluster creation.
 # It detects whether the node is a controller (head) or worker (compute),
 # then sets up the appropriate services.
+#
+# NOTE: Do NOT use "set -e" here. HyperPod treats any non-zero exit as a
+# fatal provisioning failure. Individual commands may fail non-critically
+# (e.g., optional package installs), so we handle errors explicitly.
 # =============================================================================
 
 LOG_FILE="/var/log/hyperpod/on_create.log"
@@ -31,7 +34,16 @@ if [[ ! -f "$RESOURCE_CONFIG" ]]; then
     exit 1
 fi
 
-INSTANCE_GROUP_NAME=$(jq -r '.InstanceGroupName' "$RESOURCE_CONFIG")
+# Ensure jq is available
+if ! command -v jq &>/dev/null; then
+    log "jq not found, installing..."
+    apt-get update -qq && apt-get install -y -qq jq || {
+        log "ERROR: Failed to install jq"
+        exit 1
+    }
+fi
+
+INSTANCE_GROUP_NAME=$(jq -r '.InstanceGroupName // "unknown"' "$RESOURCE_CONFIG")
 log "Instance group: $INSTANCE_GROUP_NAME"
 
 # Determine if this is the controller or a worker
@@ -43,41 +55,46 @@ fi
 log "Node type: $NODE_TYPE"
 
 # -------------------------------------------------------------------------
-# Mount FSx Lustre shared filesystem
+# Mount FSx Lustre shared filesystem (optional — skipped if not configured)
 # -------------------------------------------------------------------------
 log "--- Setting up FSx Lustre ---"
 PROVISIONING_PARAMS="/opt/ml/config/provisioning_parameters.json"
+FSX_DNS=""
+FSX_MOUNT=""
+
 if [[ -f "$PROVISIONING_PARAMS" ]]; then
-    FSX_DNS=$(jq -r '.fsx_dns_name // empty' "$PROVISIONING_PARAMS")
-    FSX_MOUNT=$(jq -r '.fsx_mountname // empty' "$PROVISIONING_PARAMS")
+    FSX_DNS=$(jq -r '.fsx_dns_name // empty' "$PROVISIONING_PARAMS" 2>/dev/null || true)
+    FSX_MOUNT=$(jq -r '.fsx_mountname // empty' "$PROVISIONING_PARAMS" 2>/dev/null || true)
+fi
 
-    if [[ -n "$FSX_DNS" && -n "$FSX_MOUNT" ]]; then
-        MOUNT_POINT="/fsx"
-        mkdir -p "$MOUNT_POINT"
+# Skip FSx if values are empty or still have placeholders
+if [[ -n "$FSX_DNS" && -n "$FSX_MOUNT" && "$FSX_DNS" != *"PLACEHOLDER"* ]]; then
+    MOUNT_POINT="/fsx"
+    mkdir -p "$MOUNT_POINT"
 
-        # Install Lustre client if not present
-        if ! dpkg -l | grep -q lustre-client-modules; then
-            log "Installing Lustre client..."
-            apt-get update -qq
-            apt-get install -y -qq lustre-client-modules-aws 2>/dev/null || \
-            apt-get install -y -qq lustre-client-modules-$(uname -r) 2>/dev/null || \
-            log "WARNING: Could not install Lustre client — may already be built into kernel"
-        fi
+    # Install Lustre client if not present
+    if ! lsmod | grep -q lustre 2>/dev/null; then
+        log "Installing Lustre client..."
+        apt-get update -qq 2>/dev/null || true
+        apt-get install -y -qq lustre-client-modules-aws 2>/dev/null || \
+        apt-get install -y -qq "lustre-client-modules-$(uname -r)" 2>/dev/null || \
+        log "WARNING: Could not install Lustre client — may already be built into kernel"
+    fi
 
-        # Mount FSx Lustre
-        if ! mountpoint -q "$MOUNT_POINT"; then
-            log "Mounting FSx Lustre: $FSX_DNS@tcp:/$FSX_MOUNT -> $MOUNT_POINT"
-            mount -t lustre -o relatime,flock "${FSX_DNS}@tcp:/${FSX_MOUNT}" "$MOUNT_POINT"
+    # Mount FSx Lustre
+    if ! mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
+        log "Mounting FSx Lustre: ${FSX_DNS}@tcp:/${FSX_MOUNT} -> $MOUNT_POINT"
+        if mount -t lustre -o relatime,flock "${FSX_DNS}@tcp:/${FSX_MOUNT}" "$MOUNT_POINT"; then
             echo "${FSX_DNS}@tcp:/${FSX_MOUNT} $MOUNT_POINT lustre defaults,relatime,flock,_netdev,x-systemd.automount,x-systemd.requires=network.target 0 0" >> /etc/fstab
             log "FSx Lustre mounted at $MOUNT_POINT"
         else
-            log "FSx Lustre already mounted at $MOUNT_POINT"
+            log "WARNING: Failed to mount FSx Lustre — continuing without shared storage"
         fi
     else
-        log "WARNING: FSx DNS or mount name not found in provisioning parameters"
+        log "FSx Lustre already mounted at $MOUNT_POINT"
     fi
 else
-    log "WARNING: Provisioning parameters not found at $PROVISIONING_PARAMS"
+    log "FSx Lustre not configured — skipping mount"
 fi
 
 # -------------------------------------------------------------------------
@@ -85,9 +102,9 @@ fi
 # -------------------------------------------------------------------------
 log "--- Verifying GPU devices ---"
 if command -v nvidia-smi &>/dev/null; then
-    GPU_COUNT=$(nvidia-smi --query-gpu=count --format=csv,noheader | head -1)
+    GPU_COUNT=$(nvidia-smi --query-gpu=count --format=csv,noheader 2>/dev/null | head -1 || echo "0")
     log "Found $GPU_COUNT GPU(s)"
-    nvidia-smi --query-gpu=name,memory.total --format=csv,noheader | while read -r line; do
+    nvidia-smi --query-gpu=name,memory.total --format=csv,noheader 2>/dev/null | while read -r line; do
         log "  GPU: $line"
     done
 else
@@ -102,30 +119,7 @@ if command -v fi_info &>/dev/null; then
     EFA_COUNT=$(fi_info -p efa 2>/dev/null | grep -c "provider: efa" || echo "0")
     log "Found $EFA_COUNT EFA interface(s)"
 else
-    log "WARNING: fi_info not found — EFA may not be installed"
-fi
-
-# -------------------------------------------------------------------------
-# Install container runtime tools (Enroot + Pyxis)
-# -------------------------------------------------------------------------
-log "--- Setting up container runtime ---"
-if ! command -v enroot &>/dev/null; then
-    log "Installing Enroot and Pyxis for container-based training..."
-    # Enroot allows running containers without Docker in Slurm
-    apt-get update -qq
-    apt-get install -y -qq curl jq squashfuse
-    ENROOT_VERSION="3.5.0"
-    ARCH=$(dpkg --print-architecture)
-    curl -fsSL -o /tmp/enroot.deb \
-        "https://github.com/NVIDIA/enroot/releases/download/v${ENROOT_VERSION}/enroot_${ENROOT_VERSION}-1_${ARCH}.deb" 2>/dev/null || \
-        log "WARNING: Could not download Enroot — container support may be limited"
-    if [[ -f /tmp/enroot.deb ]]; then
-        dpkg -i /tmp/enroot.deb 2>/dev/null || apt-get install -f -y -qq
-        rm -f /tmp/enroot.deb
-        log "Enroot installed"
-    fi
-else
-    log "Enroot already installed"
+    log "INFO: fi_info not found — EFA may not be available on this instance type"
 fi
 
 # -------------------------------------------------------------------------
@@ -133,7 +127,6 @@ fi
 # -------------------------------------------------------------------------
 log "--- Configuring SSH ---"
 
-# Set up SSH for root (inter-node communication for MPI/NCCL)
 SSH_DIR="/root/.ssh"
 mkdir -p "$SSH_DIR"
 chmod 700 "$SSH_DIR"
@@ -147,17 +140,23 @@ fi
 
 # If user provided their SSH public key (stored in SSM by CloudFormation),
 # add it to authorized_keys so they can SSH directly to cluster nodes
-CLUSTER_NAME=$(jq -r '.ClusterName // empty' /opt/ml/config/resource_config.json 2>/dev/null || echo "")
+CLUSTER_NAME=$(jq -r '.ClusterName // empty' "$RESOURCE_CONFIG" 2>/dev/null || true)
+USER_SSH_KEY="none"
+
 if [[ -n "$CLUSTER_NAME" ]]; then
     USER_SSH_KEY=$(aws ssm get-parameter \
         --name "/hyperpod/${CLUSTER_NAME}/ssh-public-key" \
         --query "Parameter.Value" --output text 2>/dev/null || echo "none")
-else
-    # Fallback: try provisioning_parameters.json
-    USER_SSH_KEY=$(jq -r '.ssh_public_key // "none"' "$PROVISIONING_PARAMS" 2>/dev/null || echo "none")
 fi
 
-if [[ -n "$USER_SSH_KEY" && "$USER_SSH_KEY" != "none" ]]; then
+if [[ -z "$USER_SSH_KEY" || "$USER_SSH_KEY" == "none" ]]; then
+    # Fallback: try provisioning_parameters.json
+    if [[ -f "$PROVISIONING_PARAMS" ]]; then
+        USER_SSH_KEY=$(jq -r '.ssh_public_key // "none"' "$PROVISIONING_PARAMS" 2>/dev/null || echo "none")
+    fi
+fi
+
+if [[ -n "$USER_SSH_KEY" && "$USER_SSH_KEY" != "none" && "$USER_SSH_KEY" != "" ]]; then
     log "Adding user-provided SSH public key to authorized_keys"
     echo "$USER_SSH_KEY" >> "$SSH_DIR/authorized_keys"
 
@@ -224,3 +223,5 @@ log "=========================================="
 log "HyperPod Lifecycle Script Complete"
 log "Node type: $NODE_TYPE"
 log "=========================================="
+
+exit 0
