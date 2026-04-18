@@ -105,7 +105,7 @@ Resources:
   HyperPodCluster:
     Type: AWS::SageMaker::Cluster
     Properties:
-      ClusterName: !Sub "${ResourceNamePrefix}-${ClusterName}"
+      ClusterName: !Ref ClusterName
       Orchestrator: !If
         - IsEKS
         - Eks:
@@ -149,7 +149,7 @@ Resources:
           - !Ref AWS::NoValue
       Tags:
         - Key: Name
-          Value: !Sub "${ResourceNamePrefix}-${ClusterName}"
+          Value: !Ref ClusterName
         - Key: ManagedBy
           Value: CloudFormation
 
@@ -160,4 +160,4 @@ Outputs:
 
   ClusterName:
     Description: Name of the HyperPod cluster
-    Value: !Sub "${ResourceNamePrefix}-${ClusterName}"
+    Value: !Ref ClusterName
