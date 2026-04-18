@@ -571,32 +571,27 @@ NCCL_SCRIPT
 #!/bin/bash
 NODES=${1:-2}
 GPUS=${2:-1}
-
-export MASTER_ADDR=$(scontrol show hostname $SLURM_NODELIST 2>/dev/null | head -1 || hostname)
-export MASTER_PORT=29500
+MASTER_PORT=29500
 
 echo "=== NanoGPT Multi-Node Training ==="
 echo "Nodes: $NODES | GPUs/node: $GPUS"
 
 srun -N $NODES --gpus-per-node=$GPUS --exclusive bash -c "
-export MASTER_ADDR=$MASTER_ADDR
-export MASTER_PORT=$MASTER_PORT
+MASTER_ADDR=\$(scontrol show hostname \$SLURM_NODELIST | head -1)
 export LD_LIBRARY_PATH=/usr/local/cuda-13.0/lib:/opt/amazon/openmpi/lib:\$LD_LIBRARY_PATH
 
 pip install torch numpy tiktoken datasets 2>/dev/null
 
 cd /tmp
-if [[ ! -d nanoGPT ]]; then
-    git clone https://github.com/karpathy/nanoGPT.git 2>/dev/null
-fi
-cd nanoGPT
+git clone https://github.com/karpathy/nanoGPT.git 2>/dev/null || true
+cd /tmp/nanoGPT
 python data/shakespeare_char/prepare.py 2>/dev/null
 
 torchrun \
     --nproc_per_node=$GPUS \
     --nnodes=$NODES \
     --node_rank=\$SLURM_NODEID \
-    --master_addr=$MASTER_ADDR \
+    --master_addr=\$MASTER_ADDR \
     --master_port=$MASTER_PORT \
     train.py \
     --dataset=shakespeare_char \
