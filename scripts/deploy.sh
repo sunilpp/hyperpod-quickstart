@@ -88,6 +88,13 @@ echo ""
 echo "CloudFormation Console URL:"
 echo "  ${CONSOLE_URL}"
 echo ""
+echo "If the stack fails, diagnose with:"
+echo "  ./scripts/stack-errors.sh ${STACK_NAME} ${REGION}"
+echo ""
+echo "Tip: Enable 'Preserve successfully provisioned resources'"
+echo "in the console (under Stack failure options) to keep failed"
+echo "stacks alive for debugging."
+echo ""
 
 # ── Open in browser ─────────────────────────────────────────────────
 if command -v open &>/dev/null; then
