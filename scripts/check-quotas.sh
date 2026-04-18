@@ -34,25 +34,25 @@ check() {
     --service-code "$service" \
     --region "$REGION" \
     --query "Quotas[?contains(QuotaName, \`$search\`)].Value | [0]" \
-    --output text 2>/dev/null)
+    --output json 2>/dev/null | tr -d ' \n')
 
   # Fall back to default quota if no applied value
-  if [[ "$value" == "None" || -z "$value" ]]; then
+  if [[ "$value" == "null" || -z "$value" ]]; then
     value=$(aws service-quotas list-aws-default-service-quotas \
       --service-code "$service" \
       --region "$REGION" \
       --query "Quotas[?contains(QuotaName, \`$search\`)].Value | [0]" \
-      --output text 2>/dev/null)
+      --output json 2>/dev/null | tr -d ' \n')
   fi
 
-  if [[ "$value" == "None" || -z "$value" ]]; then
+  if [[ "$value" == "null" || -z "$value" ]]; then
     printf "  %-60s  [?] NOT FOUND\n" "$label"
     WARN=$((WARN + 1))
-  elif (( $(echo "$value >= $required" | bc -l) )); then
-    printf "  %-60s  [PASS]  %g >= %g\n" "$label" "$value" "$required"
+  elif python3 -c "exit(0 if $value >= $required else 1)" 2>/dev/null; then
+    printf "  %-60s  [PASS]  %s >= %s\n" "$label" "$value" "$required"
     PASS=$((PASS + 1))
   else
-    printf "  %-60s  [FAIL]  %g < %g required\n" "$label" "$value" "$required"
+    printf "  %-60s  [FAIL]  %s < %s required\n" "$label" "$value" "$required"
     FAIL=$((FAIL + 1))
   fi
 }
