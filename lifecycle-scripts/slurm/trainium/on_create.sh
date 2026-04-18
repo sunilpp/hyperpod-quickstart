@@ -149,12 +149,14 @@ else
 fi
 
 # -------------------------------------------------------------------------
-# Verify Neuron devices
+# Verify Neuron devices and detect core count
 # -------------------------------------------------------------------------
 log "--- Verifying Neuron devices ---"
+NEURON_CORES=0
 if command -v neuron-ls &>/dev/null; then
     NEURON_DEVICE_COUNT=$(neuron-ls --json 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
-    log "Found $NEURON_DEVICE_COUNT Neuron device(s)"
+    NEURON_CORES=$(neuron-ls 2>/dev/null | awk '/^\| [0-9]+/ {total += $4} END {print total}' || echo "0")
+    log "Found $NEURON_DEVICE_COUNT Neuron device(s), $NEURON_CORES NeuronCore(s)"
     neuron-ls 2>/dev/null || log "WARNING: neuron-ls failed"
 else
     log "WARNING: neuron-ls not found — Neuron SDK may not be installed"
@@ -168,44 +170,47 @@ if command -v fi_info &>/dev/null; then
     EFA_COUNT=$(fi_info -p efa 2>/dev/null | grep -c "provider: efa" || echo "0")
     log "Found $EFA_COUNT EFA interface(s)"
 else
-    log "WARNING: fi_info not found — EFA may not be installed"
+    log "INFO: fi_info not found — EFA may not be available on this instance type"
 fi
 
 # -------------------------------------------------------------------------
-# Configure Neuron environment
+# Configure Neuron environment (auto-detect instance type)
 # -------------------------------------------------------------------------
 log "--- Configuring Neuron environment ---"
-cat >> /etc/environment << 'NEURON_ENV'
-NEURON_RT_NUM_CORES=32
-NEURON_RT_VISIBLE_CORES=0-31
-NEURON_CC_FLAGS=--target=trn1
+
+# Detect Neuron target based on core count
+if [[ "$NEURON_CORES" -ge 64 ]]; then
+    NEURON_TARGET="trn2"
+    NEURON_RT_NUM_CORES_VAL=64
+    NEURON_RT_VISIBLE_CORES_VAL="0-63"
+elif [[ "$NEURON_CORES" -ge 32 ]]; then
+    NEURON_TARGET="trn1"
+    NEURON_RT_NUM_CORES_VAL=32
+    NEURON_RT_VISIBLE_CORES_VAL="0-31"
+elif [[ "$NEURON_CORES" -ge 4 ]]; then
+    NEURON_TARGET="trn2"
+    NEURON_RT_NUM_CORES_VAL=4
+    NEURON_RT_VISIBLE_CORES_VAL="0-3"
+else
+    NEURON_TARGET="trn1"
+    NEURON_RT_NUM_CORES_VAL=32
+    NEURON_RT_VISIBLE_CORES_VAL="0-31"
+fi
+log "Neuron target: $NEURON_TARGET, cores: $NEURON_RT_NUM_CORES_VAL"
+
+cat >> /etc/environment << EOF
+NEURON_RT_NUM_CORES=$NEURON_RT_NUM_CORES_VAL
+NEURON_RT_VISIBLE_CORES=$NEURON_RT_VISIBLE_CORES_VAL
+NEURON_CC_FLAGS=--target=$NEURON_TARGET
+NEURON_FUSE_SOFTMAX=1
+NEURON_RT_ASYNC_EXEC_MAX_INFLIGHT_REQUESTS=5
+NEURON_RT_STOCHASTIC_ROUNDING_EN=1
+OMP_NUM_THREADS=1
+MALLOC_ARENA_MAX=70
 FI_PROVIDER=efa
 FI_EFA_USE_DEVICE_RDMA=1
-NEURON_ENV
-
-# -------------------------------------------------------------------------
-# Set up shared Neuron Python environment on FSx
-# -------------------------------------------------------------------------
-if [[ "$NODE_TYPE" == "worker" ]] && [[ -d "/fsx" ]]; then
-    log "--- Setting up shared Neuron Python environment ---"
-    VENV_PATH="/fsx/envs/neuron-env"
-
-    if [[ ! -d "$VENV_PATH" ]]; then
-        log "Creating shared Neuron virtual environment at $VENV_PATH"
-        python3 -m venv "$VENV_PATH"
-        source "$VENV_PATH/bin/activate"
-
-        # Install Neuron SDK packages from the pre-installed versions
-        pip install --upgrade pip
-        pip install torch-neuronx neuronx-cc neuronx-distributed 2>/dev/null || \
-            log "WARNING: Could not install Neuron packages — using pre-installed versions"
-
-        deactivate
-        log "Shared Neuron environment created at $VENV_PATH"
-    else
-        log "Shared Neuron environment already exists at $VENV_PATH"
-    fi
-fi
+EOF
+log "Neuron environment configured"
 
 # -------------------------------------------------------------------------
 # Configure SSH
