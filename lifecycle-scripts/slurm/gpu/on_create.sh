@@ -463,15 +463,29 @@ fi
 # -------------------------------------------------------------------------
 log "--- Configuring NCCL environment ---"
 # Do NOT set NCCL_ALGO, NCCL_PROTO, or NCCL_TREE_THRESHOLD — per AWS docs
-cat >> /etc/environment << 'NCCL_ENV'
-NCCL_DEBUG=WARN
-NCCL_BUFFSIZE=8388608
-NCCL_P2P_NET_CHUNKSIZE=524288
-NCCL_SOCKET_IFNAME=^docker,lo,veth
-FI_PROVIDER=efa
-FI_EFA_USE_DEVICE_RDMA=1
-FI_EFA_FORK_SAFE=1
-NCCL_ENV
+
+# Detect EFA RDMA capability (not all instance types support it)
+EFA_RDMA=0
+if command -v fi_info &>/dev/null; then
+    if fi_info -p efa 2>/dev/null | grep -q "FI_EP_RDM"; then
+        EFA_RDMA=1
+        log "EFA with RDMA capability detected"
+    else
+        log "EFA without RDMA — using standard networking"
+    fi
+fi
+
+{
+    echo "NCCL_DEBUG=WARN"
+    echo "NCCL_BUFFSIZE=8388608"
+    echo "NCCL_P2P_NET_CHUNKSIZE=524288"
+    echo "NCCL_SOCKET_IFNAME=^docker,lo,veth"
+    echo "FI_EFA_FORK_SAFE=1"
+    if [[ "$EFA_RDMA" -eq 1 ]]; then
+        echo "FI_PROVIDER=efa"
+        echo "FI_EFA_USE_DEVICE_RDMA=1"
+    fi
+} >> /etc/environment
 
 # -------------------------------------------------------------------------
 # Install NCCL test script on controller
@@ -497,9 +511,12 @@ if [[ "$NODE_TYPE" == "controller" ]]; then
 NODES=\${1:-2}
 GPUS=\${2:-0}
 
+# Auto-detect worker partition
+PARTITION=\$(sinfo -h -o "%P" 2>/dev/null | grep -v "^dev" | head -1 | tr -d '*' || echo "")
+
 # Auto-detect GPUs if not specified
 if [[ "\$GPUS" -eq 0 ]]; then
-    GPUS=\$(srun -N 1 -p gpu --quiet bash -c "nvidia-smi -L 2>/dev/null | wc -l" 2>/dev/null || echo 1)
+    GPUS=\$(srun -N 1 \${PARTITION:+-p \$PARTITION} --quiet bash -c "nvidia-smi -L 2>/dev/null | wc -l" 2>/dev/null || echo 1)
     [[ "\$GPUS" -eq 0 ]] && GPUS=1
 fi
 
@@ -515,12 +532,21 @@ echo "============================================================"
 
 # Build hostfile from Slurm
 HOSTFILE="/tmp/nccl-hosts-\$\$"
-sinfo -N -h -p gpu -t idle,alloc,mix -o "%N" | head -"\$NODES" > "\$HOSTFILE"
+sinfo -N -h \${PARTITION:+-p \$PARTITION} -t idle,alloc,mix -o "%N" | head -"\$NODES" > "\$HOSTFILE"
+
+# Detect EFA RDMA capability
+EFA_ARGS=""
+if command -v fi_info &>/dev/null && fi_info -p efa 2>/dev/null | grep -q "FI_EP_RDM"; then
+    EFA_ARGS="-x FI_PROVIDER=efa -x FI_EFA_USE_DEVICE_RDMA=1"
+    echo "EFA RDMA: enabled"
+else
+    echo "EFA RDMA: not available, using TCP"
+fi
 
 # Run with mpirun (--oversubscribe to bypass PPR limits)
 /opt/amazon/openmpi/bin/mpirun --allow-run-as-root --oversubscribe \\
     -np \$TOTAL -N \$GPUS --hostfile "\$HOSTFILE" --bind-to none \\
-    -x FI_PROVIDER=efa -x FI_EFA_FORK_SAFE=1 \\
+    \$EFA_ARGS -x FI_EFA_FORK_SAFE=1 \\
     -x LD_LIBRARY_PATH=\$LIB:/opt/amazon/efa/lib:/opt/amazon/openmpi/lib:/opt/amazon/ofi-nccl/lib:/usr/local/lib:/usr/lib \\
     -x NCCL_DEBUG=INFO -x NCCL_BUFFSIZE=8388608 -x NCCL_P2P_NET_CHUNKSIZE=524288 \\
     -x NCCL_SOCKET_IFNAME=^docker,lo,veth \\
