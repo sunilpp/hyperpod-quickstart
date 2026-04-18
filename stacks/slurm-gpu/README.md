@@ -46,15 +46,13 @@ aws cloudformation create-stack \
 ## After deployment
 
 ```bash
-# Connect to controller via SSM
-aws ssm start-session --target <controller-instance-id>
+# Connect to controller (from your local machine)
+./scripts/remote-nccl-test.sh my-hyperpod-slurm us-west-2
 
-# Check Slurm status
-sinfo
-squeue
-
-# Submit a test job
-sbatch -N 2 --gres=gpu:8 --wrap="srun nvidia-smi"
+# On the controller:
+sinfo                    # Check cluster status
+run-nccl-test 2 1        # NCCL benchmark (auto-detects EFA vs TCP)
+run-nanogpt 2 1          # nanoGPT distributed training test
 ```
 
 ## Cluster sizes

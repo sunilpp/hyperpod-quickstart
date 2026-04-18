@@ -46,18 +46,22 @@ aws cloudformation create-stack \
 ## After deployment
 
 ```bash
-# Configure kubectl (command is in stack Outputs)
-aws eks update-kubeconfig --name <cluster-name> --region us-west-2
+# Configure kubectl
+aws eks update-kubeconfig --name my-hyperpod-eks-eks-cluster --region us-west-2
 
-# Check nodes
+# Check nodes (may take a few minutes for nodes to appear)
 kubectl get nodes
 
-# Check GPU resources
-kubectl describe nodes | grep nvidia.com/gpu
+# Run NCCL benchmark
+./scripts/run-nccl-test-eks.sh my-hyperpod-eks-eks-cluster 2 1 us-west-2
 
 # Submit a test job
 kubectl apply -f ../../examples/submit-pytorch-job/eks/pytorchjob.yaml
 ```
+
+> **Note:** HyperPod Helm chart dependencies (device plugins, health monitoring, Kubeflow)
+> are installed automatically via a Lambda Custom Resource during stack creation.
+> No manual `helm install` step is needed.
 
 ## Cluster sizes
 

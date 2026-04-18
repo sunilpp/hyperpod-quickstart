@@ -47,7 +47,7 @@ aws cloudformation create-stack \
 
 ```bash
 # Configure kubectl
-aws eks update-kubeconfig --name <cluster-name> --region us-west-2
+aws eks update-kubeconfig --name my-hyperpod-eks-trn-eks-cluster --region us-west-2
 
 # Check nodes
 kubectl get nodes

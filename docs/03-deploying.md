@@ -8,12 +8,18 @@ This guide walks you through deploying a SageMaker HyperPod cluster step by step
 
 Make sure you have completed the [Prerequisites](01-prerequisites.md) and [chosen your stack](02-choosing-your-stack.md).
 
+**Check quotas first:**
+```bash
+./scripts/check-quotas.sh ml.g5.16xlarge 2 us-west-2
+```
+
 You need to know:
 
 - **Which stack** to deploy: `eks-gpu`, `eks-trainium`, `slurm-gpu`, or `slurm-trainium`
 - **Which region** to deploy in (for example, `us-west-2`)
 - **Which Availability Zone ID** has capacity for your instance type (for example, `usw2-az2`)
 - **Which cluster size** you want: small (2 nodes), medium (8 nodes), or large (32 nodes)
+- **An S3 bucket** for CloudFormation template packaging
 
 ---
 
@@ -197,7 +203,7 @@ Here is what gets deployed (takes 20-30 minutes):
 | 2. Security | Security group with self-referencing EFA rules | ~1 min |
 | 3. Storage | FSx for Lustre filesystem, S3 lifecycle bucket | ~5 min |
 | 4. IAM | Execution roles, policies | ~1 min |
-| 5. EKS (EKS stacks only) | EKS control plane, managed add-ons | ~10 min |
+| 5. EKS (EKS stacks only) | EKS control plane, managed add-ons, Helm chart dependencies | ~15 min |
 | 6. HyperPod cluster | Cluster creation, instance provisioning, lifecycle scripts | ~10-15 min |
 | 7. Observability (optional) | Prometheus workspace, Grafana workspace | ~3 min |
 | 8. Validation (optional) | Lambda-based health checks | ~2 min |
@@ -211,31 +217,32 @@ Once the stack shows `CREATE_COMPLETE`, you can connect.
 
 ### Slurm Clusters
 
-Connect to the head node using SSM Session Manager:
+Connect to the controller using the provided SSM script:
 
 ```bash
-# Find the controller instance ID from the SageMaker console,
-# or from the stack outputs
-aws ssm start-session --target <controller-instance-id> --region us-west-2
+# From your local machine (auto-discovers controller, builds SSM target)
+./scripts/remote-nccl-test.sh my-hyperpod-slurm us-west-2
 ```
 
-Once connected, verify the cluster is working:
+Or connect via the AWS Console: **Systems Manager > Session Manager**, using target format:
+```
+sagemaker-cluster:<cluster-id>_controller-group-<instance-id>
+```
+
+Once connected, verify and test:
 
 ```bash
-# Check Slurm cluster status
+# Check cluster status
 sinfo
 
-# Check running jobs
-squeue
+# Run NCCL benchmark (auto-detects EFA vs TCP)
+run-nccl-test 2 1
 
-# Check the shared filesystem
-ls /fsx
+# Run nanoGPT distributed training test
+run-nanogpt 2 1
 
-# Check GPUs (GPU stacks)
-nvidia-smi
-
-# Check Neuron devices (Trainium stacks)
-neuron-ls
+# Check lifecycle script logs
+cat /var/log/hyperpod/on_create.log
 ```
 
 ### EKS Clusters
@@ -282,8 +289,28 @@ After deployment, these outputs are available in the CloudFormation console (Out
 
 ---
 
+## Troubleshooting
+
+If the stack fails:
+
+```bash
+# Drill into nested stack errors
+./scripts/stack-errors.sh my-hyperpod us-west-2
+
+# Check lifecycle script logs (on controller via SSM)
+cat /var/log/hyperpod/on_create.log
+```
+
+Common issues:
+- **Orphaned IAM roles** — delete manually if a previous stack failed during rollback
+- **Service quotas** — run `./scripts/check-quotas.sh` before deploying
+- **EKS Helm chart** — installed automatically via Lambda; no manual steps needed
+
+---
+
 ## Next Steps
 
 - [Validate your cluster](04-validating.md) to confirm everything is healthy
 - [Run your first training job](05-running-first-job.md)
 - [Set up monitoring](06-observability.md) to view Grafana dashboards
+- See [ROADMAP.md](../ROADMAP.md) for planned improvements

@@ -47,17 +47,12 @@ aws cloudformation create-stack \
 ## After deployment
 
 ```bash
-# Connect to controller
-aws ssm start-session --target <controller-instance-id>
+# Connect to controller (from your local machine)
+./scripts/remote-nccl-test.sh my-hyperpod-trn us-west-2
 
-# Verify Neuron devices
-srun -N 1 neuron-ls
-
-# Activate shared Neuron environment
-source /fsx/envs/neuron-env/bin/activate
-
-# Submit a test job
-sbatch -N 2 --wrap="srun neuron-ls"
+# On the controller:
+sinfo                    # Check cluster status
+srun -N 1 neuron-ls      # Verify Neuron devices
 ```
 
 ## Cluster sizes
