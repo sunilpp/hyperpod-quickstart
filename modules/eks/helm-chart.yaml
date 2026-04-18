@@ -1,0 +1,148 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Install HyperPod Helm chart dependencies on EKS cluster.
+  Uses a Lambda-backed Custom Resource with pre-built helm/kubectl/git
+  binaries from the AWS-provided Lambda layer. This must complete before
+  the HyperPod cluster is created.
+
+Parameters:
+  ResourceNamePrefix:
+    Type: String
+    Default: hyperpod
+
+  EKSClusterName:
+    Type: String
+    Description: Name of the EKS cluster to install Helm chart on.
+
+  HelmRepoUrl:
+    Type: String
+    Default: https://github.com/aws/sagemaker-hyperpod-cli.git
+    Description: GitHub URL for the HyperPod Helm chart repository.
+
+  HelmChartPath:
+    Type: String
+    Default: helm_chart/HyperPodHelmChart
+
+  HelmRelease:
+    Type: String
+    Default: hyperpod-dependencies
+
+  HelmNamespace:
+    Type: String
+    Default: kube-system
+
+  # Pre-built Lambda layer from AWS (contains helm, kubectl, git)
+  LambdaLayerS3Bucket:
+    Type: String
+    Default: ws-assets-prod-iad-r-pdx-f3b3f9f1a7d6a3d0
+
+  LambdaLayerS3Key:
+    Type: String
+    Default: 2433d39e-ccfe-4c00-9d3d-9917b729258e/lambda-layer.zip
+
+  LambdaFunctionS3Key:
+    Type: String
+    Default: 2433d39e-ccfe-4c00-9d3d-9917b729258e/function.zip
+
+Resources:
+
+  # -------------------------------------------------------------------------
+  # IAM Role for the Helm installer Lambda
+  # -------------------------------------------------------------------------
+  HelmInstallerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourceNamePrefix}-helm-installer-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+        - PolicyName: EKSAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - eks:DescribeCluster
+                Resource: !Sub "arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:cluster/${EKSClusterName}"
+
+  # -------------------------------------------------------------------------
+  # EKS Access Entry — grants Lambda cluster admin access
+  # -------------------------------------------------------------------------
+  HelmInstallerAccessEntry:
+    Type: AWS::EKS::AccessEntry
+    Properties:
+      ClusterName: !Ref EKSClusterName
+      PrincipalArn: !GetAtt HelmInstallerRole.Arn
+      AccessPolicies:
+        - PolicyArn: "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
+          AccessScope:
+            Type: cluster
+
+  # -------------------------------------------------------------------------
+  # Lambda Layer — pre-built helm, kubectl, git binaries from AWS
+  # -------------------------------------------------------------------------
+  HelmInstallerLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: !Sub "${ResourceNamePrefix}-helm-tools-layer"
+      Description: Lambda layer with kubectl, helm, and git binaries
+      Content:
+        S3Bucket: !Ref LambdaLayerS3Bucket
+        S3Key: !Ref LambdaLayerS3Key
+      CompatibleArchitectures:
+        - x86_64
+      CompatibleRuntimes:
+        - python3.9
+        - python3.10
+        - python3.11
+        - python3.12
+
+  # -------------------------------------------------------------------------
+  # Lambda Function — installs Helm chart on EKS
+  # -------------------------------------------------------------------------
+  HelmInstallerFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: HelmInstallerAccessEntry
+    Properties:
+      FunctionName: !Sub "${ResourceNamePrefix}-helm-installer"
+      Runtime: python3.12
+      Handler: lambda_function.lambda_handler
+      Timeout: 600
+      MemorySize: 512
+      Role: !GetAtt HelmInstallerRole.Arn
+      Code:
+        S3Bucket: !Ref LambdaLayerS3Bucket
+        S3Key: !Ref LambdaFunctionS3Key
+      Layers:
+        - !Ref HelmInstallerLayer
+      Environment:
+        Variables:
+          CLUSTER_NAME: !Ref EKSClusterName
+          PATH: "/opt/python/bin:/var/lang/bin:/usr/local/bin:/usr/bin:/bin"
+          GIT_EXEC_PATH: "/opt/python/libexec/git-core"
+          KUBECONFIG: "/tmp/.kube/config"
+          GITHUB_REPO_URL: !Ref HelmRepoUrl
+          CHART_PATH: !Ref HelmChartPath
+          NAMESPACE: !Ref HelmNamespace
+          RELEASE_NAME: !Ref HelmRelease
+          LD_LIBRARY_PATH: "/opt/python/lib"
+
+  # -------------------------------------------------------------------------
+  # Custom Resource — triggers Helm installation
+  # -------------------------------------------------------------------------
+  HelmInstallation:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: !GetAtt HelmInstallerFunction.Arn
+
+Outputs:
+  HelmChartDeploymentComplete:
+    Description: Signals that Helm chart dependencies are installed
+    Value: "HelmChartDeploymentComplete"

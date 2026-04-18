@@ -215,9 +215,21 @@ Resources:
         - "none"
       Description: User SSH public key for cluster node access
 
-  HyperPodStack:
+  # =========================================================================
+  # HyperPod Helm Chart Dependencies
+  # =========================================================================
+  HelmChartStack:
     Type: AWS::CloudFormation::Stack
     DependsOn: EKSAddonsStack
+    Properties:
+      TemplateURL: ../../modules/eks/helm-chart.yaml
+      Parameters:
+        ResourceNamePrefix: !Ref ClusterName
+        EKSClusterName: !GetAtt EKSStack.Outputs.ClusterName
+
+  HyperPodStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: HelmChartStack
     Properties:
       TemplateURL: ../../modules/hyperpod/cluster.yaml
       Parameters:
