@@ -158,7 +158,7 @@ Resources:
     Properties:
       ClusterName: !Ref EKSCluster
       PrincipalArn: !Ref HyperPodExecutionRoleArn
-      Type: EC2_LINUX
+      Type: HYPERPOD_LINUX
 
 Outputs:
   ClusterArn:
