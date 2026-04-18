@@ -43,12 +43,29 @@ if ! command -v jq &>/dev/null; then
     }
 fi
 
+# Helper: get instance metadata (supports both IMDSv1 and IMDSv2)
+get_metadata() {
+    local path="$1"
+    # Try IMDSv2 first (requires token)
+    local token
+    token=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
+        -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null || true)
+    if [[ -n "$token" ]]; then
+        curl -s -H "X-aws-ec2-metadata-token: $token" \
+            "http://169.254.169.254/latest/meta-data/$path" 2>/dev/null || true
+    else
+        # Fall back to IMDSv1
+        curl -s "http://169.254.169.254/latest/meta-data/$path" 2>/dev/null || true
+    fi
+}
+
 # Detect instance group name — try multiple config formats
 INSTANCE_GROUP_NAME=$(jq -r '.InstanceGroupName // empty' "$RESOURCE_CONFIG" 2>/dev/null || true)
 
 # If not at top level, find it by matching this instance's ID against InstanceGroups
 if [[ -z "$INSTANCE_GROUP_NAME" ]]; then
-    INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || true)
+    INSTANCE_ID=$(get_metadata "instance-id")
+    log "Instance ID from metadata: ${INSTANCE_ID:-not available}"
     if [[ -n "$INSTANCE_ID" ]]; then
         INSTANCE_GROUP_NAME=$(jq -r --arg id "$INSTANCE_ID" '
             .InstanceGroups[]? |
@@ -58,11 +75,24 @@ if [[ -z "$INSTANCE_GROUP_NAME" ]]; then
     fi
 fi
 
-# Final fallback: check if this node's instance type is the controller type (ml.m5)
+# Fallback: check instance type from metadata
 if [[ -z "$INSTANCE_GROUP_NAME" ]]; then
-    CURRENT_TYPE=$(curl -s http://169.254.169.254/latest/meta-data/instance-type 2>/dev/null || true)
-    log "Could not detect instance group, instance type: $CURRENT_TYPE"
+    CURRENT_TYPE=$(get_metadata "instance-type")
+    log "Could not detect instance group, instance type: ${CURRENT_TYPE:-not available}"
     if echo "$CURRENT_TYPE" | grep -qi "m5"; then
+        INSTANCE_GROUP_NAME="controller-group"
+    else
+        INSTANCE_GROUP_NAME="worker-group"
+    fi
+fi
+
+# Final fallback: check ClusterConfig for Slurm controller hint
+if [[ -z "$INSTANCE_GROUP_NAME" ]]; then
+    CLUSTER_TYPE=$(jq -r '.ClusterConfig.ClusterType // empty' "$RESOURCE_CONFIG" 2>/dev/null || true)
+    PRIMARY_IP=$(jq -r '.ClusterConfig.SlurmConfig.PrimaryControllerIp // empty' "$RESOURCE_CONFIG" 2>/dev/null || true)
+    # On the controller node, PrimaryControllerIp is empty
+    if [[ "$CLUSTER_TYPE" == "Slurm" && -z "$PRIMARY_IP" ]]; then
+        log "Detected as controller (PrimaryControllerIp is empty)"
         INSTANCE_GROUP_NAME="controller-group"
     else
         INSTANCE_GROUP_NAME="worker-group"
