@@ -1,11 +1,14 @@
 #!/bin/bash
-set -euo pipefail
 
 # =============================================================================
 # HyperPod Lifecycle Script: Slurm + Trainium
 # =============================================================================
 # This script runs on every node during HyperPod cluster creation.
 # Similar to the GPU variant but configures Neuron SDK instead of NVIDIA tools.
+#
+# NOTE: Do NOT use "set -e" here. HyperPod treats any non-zero exit as a
+# fatal provisioning failure. Individual commands may fail non-critically,
+# so we handle errors explicitly.
 # =============================================================================
 
 LOG_FILE="/var/log/hyperpod/on_create.log"
@@ -30,7 +33,16 @@ if [[ ! -f "$RESOURCE_CONFIG" ]]; then
     exit 1
 fi
 
-INSTANCE_GROUP_NAME=$(jq -r '.InstanceGroupName' "$RESOURCE_CONFIG")
+# Ensure jq is available
+if ! command -v jq &>/dev/null; then
+    log "jq not found, installing..."
+    apt-get update -qq && apt-get install -y -qq jq || {
+        log "ERROR: Failed to install jq"
+        exit 1
+    }
+fi
+
+INSTANCE_GROUP_NAME=$(jq -r '.InstanceGroupName // "unknown"' "$RESOURCE_CONFIG")
 log "Instance group: $INSTANCE_GROUP_NAME"
 
 if echo "$INSTANCE_GROUP_NAME" | grep -qi "controller"; then
@@ -45,31 +57,39 @@ log "Node type: $NODE_TYPE"
 # -------------------------------------------------------------------------
 log "--- Setting up FSx Lustre ---"
 PROVISIONING_PARAMS="/opt/ml/config/provisioning_parameters.json"
+FSX_DNS=""
+FSX_MOUNT=""
+
 if [[ -f "$PROVISIONING_PARAMS" ]]; then
-    FSX_DNS=$(jq -r '.fsx_dns_name // empty' "$PROVISIONING_PARAMS")
-    FSX_MOUNT=$(jq -r '.fsx_mountname // empty' "$PROVISIONING_PARAMS")
+    FSX_DNS=$(jq -r '.fsx_dns_name // empty' "$PROVISIONING_PARAMS" 2>/dev/null || true)
+    FSX_MOUNT=$(jq -r '.fsx_mountname // empty' "$PROVISIONING_PARAMS" 2>/dev/null || true)
+fi
 
-    if [[ -n "$FSX_DNS" && -n "$FSX_MOUNT" ]]; then
-        MOUNT_POINT="/fsx"
-        mkdir -p "$MOUNT_POINT"
+if [[ -n "$FSX_DNS" && -n "$FSX_MOUNT" && "$FSX_DNS" != *"PLACEHOLDER"* ]]; then
+    MOUNT_POINT="/fsx"
+    mkdir -p "$MOUNT_POINT"
 
-        if ! dpkg -l | grep -q lustre-client-modules; then
-            log "Installing Lustre client..."
-            apt-get update -qq
-            apt-get install -y -qq lustre-client-modules-aws 2>/dev/null || \
-            apt-get install -y -qq lustre-client-modules-$(uname -r) 2>/dev/null || \
-            log "WARNING: Could not install Lustre client"
-        fi
+    if ! lsmod | grep -q lustre 2>/dev/null; then
+        log "Installing Lustre client..."
+        apt-get update -qq 2>/dev/null || true
+        apt-get install -y -qq lustre-client-modules-aws 2>/dev/null || \
+        apt-get install -y -qq "lustre-client-modules-$(uname -r)" 2>/dev/null || \
+        log "WARNING: Could not install Lustre client — may already be built into kernel"
+    fi
 
-        if ! mountpoint -q "$MOUNT_POINT"; then
-            log "Mounting FSx Lustre: $FSX_DNS@tcp:/$FSX_MOUNT -> $MOUNT_POINT"
-            mount -t lustre -o relatime,flock "${FSX_DNS}@tcp:/${FSX_MOUNT}" "$MOUNT_POINT"
+    if ! mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
+        log "Mounting FSx Lustre: ${FSX_DNS}@tcp:/${FSX_MOUNT} -> $MOUNT_POINT"
+        if mount -t lustre -o relatime,flock "${FSX_DNS}@tcp:/${FSX_MOUNT}" "$MOUNT_POINT"; then
             echo "${FSX_DNS}@tcp:/${FSX_MOUNT} $MOUNT_POINT lustre defaults,relatime,flock,_netdev,x-systemd.automount,x-systemd.requires=network.target 0 0" >> /etc/fstab
             log "FSx Lustre mounted at $MOUNT_POINT"
         else
-            log "FSx Lustre already mounted at $MOUNT_POINT"
+            log "WARNING: Failed to mount FSx Lustre — continuing without shared storage"
         fi
+    else
+        log "FSx Lustre already mounted at $MOUNT_POINT"
     fi
+else
+    log "FSx Lustre not configured — skipping mount"
 fi
 
 # -------------------------------------------------------------------------
@@ -208,3 +228,5 @@ log "=========================================="
 log "HyperPod Lifecycle Script Complete"
 log "Node type: $NODE_TYPE"
 log "=========================================="
+
+exit 0

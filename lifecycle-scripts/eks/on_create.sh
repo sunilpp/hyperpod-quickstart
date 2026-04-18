@@ -1,5 +1,4 @@
 #!/bin/bash
-set -euo pipefail
 
 # =============================================================================
 # HyperPod Lifecycle Script: EKS
@@ -7,6 +6,9 @@ set -euo pipefail
 # Minimal lifecycle script for EKS-orchestrated HyperPod clusters.
 # EKS handles most node configuration (device plugins, networking) via
 # managed add-ons, so this script only handles FSx mounting and basic setup.
+#
+# NOTE: Do NOT use "set -e" here. HyperPod treats any non-zero exit as a
+# fatal provisioning failure.
 # =============================================================================
 
 LOG_FILE="/var/log/hyperpod/on_create.log"
@@ -26,32 +28,36 @@ log "=========================================="
 # Mount FSx Lustre (if configured)
 # -------------------------------------------------------------------------
 PROVISIONING_PARAMS="/opt/ml/config/provisioning_parameters.json"
+FSX_DNS=""
+FSX_MOUNT=""
+
 if [[ -f "$PROVISIONING_PARAMS" ]]; then
-    FSX_DNS=$(jq -r '.fsx_dns_name // empty' "$PROVISIONING_PARAMS" 2>/dev/null)
-    FSX_MOUNT=$(jq -r '.fsx_mountname // empty' "$PROVISIONING_PARAMS" 2>/dev/null)
+    FSX_DNS=$(jq -r '.fsx_dns_name // empty' "$PROVISIONING_PARAMS" 2>/dev/null || true)
+    FSX_MOUNT=$(jq -r '.fsx_mountname // empty' "$PROVISIONING_PARAMS" 2>/dev/null || true)
+fi
 
-    if [[ -n "$FSX_DNS" && -n "$FSX_MOUNT" ]]; then
-        log "--- Setting up FSx Lustre ---"
-        MOUNT_POINT="/fsx"
-        mkdir -p "$MOUNT_POINT"
+if [[ -n "$FSX_DNS" && -n "$FSX_MOUNT" && "$FSX_DNS" != *"PLACEHOLDER"* ]]; then
+    log "--- Setting up FSx Lustre ---"
+    MOUNT_POINT="/fsx"
+    mkdir -p "$MOUNT_POINT"
 
-        if ! dpkg -l | grep -q lustre-client-modules; then
-            apt-get update -qq
-            apt-get install -y -qq lustre-client-modules-aws 2>/dev/null || \
-            apt-get install -y -qq lustre-client-modules-$(uname -r) 2>/dev/null || \
-            log "WARNING: Could not install Lustre client"
-        fi
+    if ! lsmod | grep -q lustre 2>/dev/null; then
+        apt-get update -qq 2>/dev/null || true
+        apt-get install -y -qq lustre-client-modules-aws 2>/dev/null || \
+        apt-get install -y -qq "lustre-client-modules-$(uname -r)" 2>/dev/null || \
+        log "WARNING: Could not install Lustre client"
+    fi
 
-        if ! mountpoint -q "$MOUNT_POINT"; then
-            mount -t lustre -o relatime,flock "${FSX_DNS}@tcp:/${FSX_MOUNT}" "$MOUNT_POINT"
+    if ! mountpoint -q "$MOUNT_POINT" 2>/dev/null; then
+        if mount -t lustre -o relatime,flock "${FSX_DNS}@tcp:/${FSX_MOUNT}" "$MOUNT_POINT"; then
             echo "${FSX_DNS}@tcp:/${FSX_MOUNT} $MOUNT_POINT lustre defaults,relatime,flock,_netdev,x-systemd.automount,x-systemd.requires=network.target 0 0" >> /etc/fstab
             log "FSx Lustre mounted at $MOUNT_POINT"
+        else
+            log "WARNING: Failed to mount FSx Lustre — continuing without shared storage"
         fi
-    else
-        log "No FSx configuration found — skipping mount"
     fi
 else
-    log "No provisioning parameters found — skipping FSx mount"
+    log "FSx Lustre not configured — skipping mount"
 fi
 
 # -------------------------------------------------------------------------
@@ -59,7 +65,7 @@ fi
 # -------------------------------------------------------------------------
 log "--- Verifying accelerator devices ---"
 if command -v nvidia-smi &>/dev/null; then
-    GPU_COUNT=$(nvidia-smi --query-gpu=count --format=csv,noheader | head -1)
+    GPU_COUNT=$(nvidia-smi --query-gpu=count --format=csv,noheader 2>/dev/null | head -1 || echo "0")
     log "Found $GPU_COUNT NVIDIA GPU(s)"
 elif command -v neuron-ls &>/dev/null; then
     NEURON_COUNT=$(neuron-ls --json 2>/dev/null | jq 'length' 2>/dev/null || echo "0")
@@ -71,3 +77,5 @@ fi
 log "=========================================="
 log "HyperPod Lifecycle Script Complete"
 log "=========================================="
+
+exit 0
