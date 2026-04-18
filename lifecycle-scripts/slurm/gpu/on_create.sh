@@ -511,12 +511,9 @@ if [[ "$NODE_TYPE" == "controller" ]]; then
 NODES=\${1:-2}
 GPUS=\${2:-0}
 
-# Auto-detect worker partition
-PARTITION=\$(sinfo -h -o "%P" 2>/dev/null | grep -v "^dev" | head -1 | tr -d '*' || echo "")
-
 # Auto-detect GPUs if not specified
 if [[ "\$GPUS" -eq 0 ]]; then
-    GPUS=\$(srun -N 1 \${PARTITION:+-p \$PARTITION} --quiet bash -c "nvidia-smi -L 2>/dev/null | wc -l" 2>/dev/null || echo 1)
+    GPUS=\$(nvidia-smi -L 2>/dev/null | wc -l || echo 1)
     [[ "\$GPUS" -eq 0 ]] && GPUS=1
 fi
 
@@ -530,27 +527,33 @@ echo "  Nodes: \$NODES | GPUs/node: \$GPUS | Total: \$TOTAL"
 echo "  Binary: \$BINARY"
 echo "============================================================"
 
-# Build hostfile from Slurm
+# Build hostfile from Slurm (deduplicated, with slots)
 HOSTFILE="/tmp/nccl-hosts-\$\$"
-sinfo -N -h \${PARTITION:+-p \$PARTITION} -t idle,alloc,mix -o "%N" | head -"\$NODES" > "\$HOSTFILE"
+sinfo -N -h -o "%N" | sort -u | head -"\$NODES" | awk "{print \\\$1\" slots=\$GPUS\"}" > "\$HOSTFILE"
+echo "Hosts:"
+cat "\$HOSTFILE" | sed 's/^/  /'
 
-# Detect EFA RDMA capability
+# Detect EFA RDMA capability for NCCL transport
 EFA_ARGS=""
-if command -v fi_info &>/dev/null && fi_info -p efa 2>/dev/null | grep -q "FI_EP_RDM"; then
-    EFA_ARGS="-x FI_PROVIDER=efa -x FI_EFA_USE_DEVICE_RDMA=1"
-    echo "EFA RDMA: enabled"
+NCCL_NET_ARGS=""
+MCA_ARGS="--mca pml ob1 --mca btl tcp,self --mca btl_tcp_if_exclude lo,docker0"
+if command -v fi_info &>/dev/null && fi_info -p efa -c FI_EP_RDM 2>/dev/null | grep -q "provider: efa"; then
+    EFA_ARGS="-x FI_PROVIDER=efa -x FI_EFA_USE_DEVICE_RDMA=1 -x FI_EFA_FORK_SAFE=1"
+    NCCL_NET_ARGS=""
+    echo "Transport: EFA RDMA"
 else
-    echo "EFA RDMA: not available, using TCP"
+    EFA_ARGS="-x FI_EFA_USE_DEVICE_RDMA=0"
+    NCCL_NET_ARGS="-x NCCL_NET_PLUGIN=none"
+    echo "Transport: TCP sockets (no EFA RDMA on this instance type)"
 fi
 
-# Run with mpirun (--oversubscribe to bypass PPR limits)
-/opt/amazon/openmpi/bin/mpirun --allow-run-as-root --oversubscribe \\
-    -np \$TOTAL -N \$GPUS --hostfile "\$HOSTFILE" --bind-to none \\
-    \$EFA_ARGS -x FI_EFA_FORK_SAFE=1 \\
+/opt/amazon/openmpi/bin/mpirun --allow-run-as-root \\
+    -np \$TOTAL --hostfile "\$HOSTFILE" --bind-to none \\
+    \$MCA_ARGS \\
     -x LD_LIBRARY_PATH=\$LIB:/opt/amazon/efa/lib:/opt/amazon/openmpi/lib:/opt/amazon/ofi-nccl/lib:/usr/local/lib:/usr/lib \\
     -x NCCL_DEBUG=INFO -x NCCL_BUFFSIZE=8388608 -x NCCL_P2P_NET_CHUNKSIZE=524288 \\
-    -x NCCL_SOCKET_IFNAME=^docker,lo,veth \\
-    --mca pml ^ucx --mca btl tcp,self --mca btl_tcp_if_exclude lo,docker0,veth_def_agent \\
+    -x NCCL_SOCKET_IFNAME=ens6 \\
+    \$EFA_ARGS \$NCCL_NET_ARGS \\
     \$BINARY -b 8 -e 16G -f 2 -g 1 -c 1 -n 100
 
 rm -f "\$HOSTFILE"
