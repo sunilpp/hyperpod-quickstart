@@ -326,6 +326,21 @@ else
     systemctl enable slurmd 2>/dev/null || true
     systemctl start slurmd 2>/dev/null || log "WARNING: Could not start slurmd"
 
+    # Verify slurmd is running and connected
+    sleep 5
+    if systemctl is-active slurmd &>/dev/null; then
+        log "slurmd is running"
+        # Log the actual ExecStart line for debugging
+        grep ExecStart /etc/systemd/system/slurmd.service 2>/dev/null | while read -r line; do
+            log "  slurmd config: $line"
+        done
+    else
+        log "ERROR: slurmd failed to start"
+        journalctl -u slurmd --no-pager -n 10 2>/dev/null | while read -r line; do
+            log "  slurmd log: $line"
+        done
+    fi
+
     # Prevent slurmctld from running on compute nodes
     if [[ -f /etc/systemd/system/slurmctld.service ]]; then
         mv /etc/systemd/system/slurmctld.service /etc/systemd/system/slurmctld_DISABLED.service 2>/dev/null || true
