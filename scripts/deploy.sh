@@ -113,22 +113,11 @@ echo "in the console (under Stack failure options) to keep failed"
 echo "stacks alive for debugging."
 echo ""
 
-# ── EKS: Remind about Helm dependencies ───────────────────────────
+# ── EKS: Note about automated Helm installation ──────────────────
 if [[ "$STACK_VARIANT" == eks-* ]]; then
-  echo "============================================================"
-  echo "  IMPORTANT: EKS HyperPod requires Helm dependencies"
-  echo "============================================================"
-  echo ""
-  echo "  After the EKS cluster is created (EKSStack shows"
-  echo "  CREATE_COMPLETE in the console) but BEFORE the HyperPod"
-  echo "  cluster finishes, run:"
-  echo ""
-  echo "    ./scripts/install-eks-hyperpod-deps.sh \\"
-  echo "        ${STACK_NAME}-eks-cluster ${REGION}"
-  echo ""
-  echo "  This installs device plugins, health monitoring, and"
-  echo "  Kubeflow operators that HyperPod requires."
-  echo "  Prerequisites: helm, kubectl installed locally."
+  echo "  Note: HyperPod Helm dependencies (device plugins, health"
+  echo "  monitoring, Kubeflow) are installed automatically via a"
+  echo "  Lambda Custom Resource during stack creation."
   echo ""
 fi
 

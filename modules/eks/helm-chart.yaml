@@ -80,6 +80,7 @@ Resources:
     Properties:
       ClusterName: !Ref EKSClusterName
       PrincipalArn: !GetAtt HelmInstallerRole.Arn
+      Type: STANDARD
       AccessPolicies:
         - PolicyArn: "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
           AccessScope:
