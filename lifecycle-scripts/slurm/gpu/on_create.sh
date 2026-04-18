@@ -195,7 +195,8 @@ fi
 
 # If user provided their SSH public key (stored in SSM by CloudFormation),
 # add it to authorized_keys so they can SSH directly to cluster nodes
-CLUSTER_NAME=$(jq -r '.ClusterName // empty' "$RESOURCE_CONFIG" 2>/dev/null || true)
+CLUSTER_NAME=$(jq -r '.ClusterConfig.ClusterName // .ClusterName // empty' "$RESOURCE_CONFIG" 2>/dev/null || true)
+log "Cluster name for SSM lookup: ${CLUSTER_NAME:-not found}"
 USER_SSH_KEY="none"
 
 if [[ -n "$CLUSTER_NAME" ]]; then
@@ -243,6 +244,21 @@ log "SSH configured"
 # Start Slurm services
 # -------------------------------------------------------------------------
 log "--- Starting Slurm services ---"
+
+# Wait for HyperPod to provision slurm.conf before starting daemons
+log "Waiting for slurm.conf to be provisioned by HyperPod..."
+for i in $(seq 1 120); do
+    if [[ -f /etc/slurm/slurm.conf ]]; then
+        log "slurm.conf found after ${i}s"
+        break
+    fi
+    sleep 1
+done
+
+if [[ ! -f /etc/slurm/slurm.conf ]]; then
+    log "WARNING: slurm.conf not found after 120s — Slurm may not start correctly"
+fi
+
 if [[ "$NODE_TYPE" == "controller" ]]; then
     log "Starting Slurm controller daemon (slurmctld)..."
     systemctl enable slurmctld 2>/dev/null || true

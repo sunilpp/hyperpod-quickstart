@@ -219,7 +219,8 @@ if [[ ! -f "$SSH_DIR/id_rsa" ]]; then
 fi
 
 # Add user-provided SSH public key (stored in SSM by CloudFormation)
-CLUSTER_NAME=$(jq -r '.ClusterName // empty' /opt/ml/config/resource_config.json 2>/dev/null || echo "")
+CLUSTER_NAME=$(jq -r '.ClusterConfig.ClusterName // .ClusterName // empty' "$RESOURCE_CONFIG" 2>/dev/null || true)
+log "Cluster name for SSM lookup: ${CLUSTER_NAME:-not found}"
 if [[ -n "$CLUSTER_NAME" ]]; then
     USER_SSH_KEY=$(aws ssm get-parameter \
         --name "/hyperpod/${CLUSTER_NAME}/ssh-public-key" \
@@ -258,6 +259,21 @@ log "SSH configured"
 # Start Slurm services
 # -------------------------------------------------------------------------
 log "--- Starting Slurm services ---"
+
+# Wait for HyperPod to provision slurm.conf before starting daemons
+log "Waiting for slurm.conf to be provisioned by HyperPod..."
+for i in $(seq 1 120); do
+    if [[ -f /etc/slurm/slurm.conf ]]; then
+        log "slurm.conf found after ${i}s"
+        break
+    fi
+    sleep 1
+done
+
+if [[ ! -f /etc/slurm/slurm.conf ]]; then
+    log "WARNING: slurm.conf not found after 120s — Slurm may not start correctly"
+fi
+
 if [[ "$NODE_TYPE" == "controller" ]]; then
     log "Starting Slurm controller daemon (slurmctld)..."
     systemctl enable slurmctld 2>/dev/null || true
