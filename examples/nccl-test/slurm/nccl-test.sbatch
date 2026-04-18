@@ -11,7 +11,7 @@
 
 #SBATCH --job-name=nccl-test
 #SBATCH --nodes=2
-#SBATCH --ntasks-per-node=1
+#SBATCH --ntasks-per-node=8    # GPUs per node (8 for p5, 1 for g5, adjust to match instance)
 #SBATCH --output=%x_%j.out
 #SBATCH --error=%x_%j.err
 #SBATCH --exclusive

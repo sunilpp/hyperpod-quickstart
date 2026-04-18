@@ -396,6 +396,12 @@ echo "Binary: \$BINARY"
 NCCL_SCRIPT
     chmod +x /opt/slurm/bin/run-nccl-test
 
+    # Ensure /opt/slurm/bin is in PATH for all users
+    if ! grep -q '/opt/slurm/bin' /etc/environment 2>/dev/null; then
+        sed -i 's|^PATH="|PATH="/opt/slurm/bin:|' /etc/environment 2>/dev/null || \
+        echo 'PATH="/opt/slurm/bin:$PATH"' >> /etc/environment
+    fi
+
     if [[ -n "$NCCL_BINARY" ]]; then
         log "NCCL test ready: run-nccl-test [nodes] [gpus-per-node]"
         log "  Example: run-nccl-test 2 1"
