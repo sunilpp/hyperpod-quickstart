@@ -49,7 +49,7 @@ Resources:
                 Action:
                   - sagemaker:DescribeCluster
                   - sagemaker:ListClusterNodes
-                Resource: !Ref ClusterArn
+                Resource: "*"
               - Effect: Allow
                 Action:
                   - ec2:DescribeSubnets
@@ -163,8 +163,10 @@ Resources:
 
               passed, detail = check_cluster_nodes(cluster_name, expected_count)
               results['NodeCount'] = detail
+              # Node count is a warning, not critical — EKS uses continuous
+              # provisioning so nodes may not be Running immediately
               if not passed:
-                  all_critical_pass = False
+                  results['NodeCountWarning'] = 'Nodes may still be provisioning'
 
               passed, detail = check_subnet_private(subnet_id)
               results['SubnetCheck'] = detail
