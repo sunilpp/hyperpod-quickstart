@@ -145,6 +145,7 @@ if [[ -z "$FSX_DNS" || "$FSX_DNS" == *"PLACEHOLDER"* ]]; then
     fi
 fi
 
+FSX_MOUNTED=false
 if [[ -n "$FSX_DNS" && -n "$FSX_MOUNT" && "$FSX_DNS" != *"PLACEHOLDER"* ]]; then
     MOUNT_POINT="/fsx"
     mkdir -p "$MOUNT_POINT"
@@ -162,11 +163,13 @@ if [[ -n "$FSX_DNS" && -n "$FSX_MOUNT" && "$FSX_DNS" != *"PLACEHOLDER"* ]]; then
         if mount -t lustre -o relatime,flock "${FSX_DNS}@tcp:/${FSX_MOUNT}" "$MOUNT_POINT"; then
             echo "${FSX_DNS}@tcp:/${FSX_MOUNT} $MOUNT_POINT lustre defaults,relatime,flock,_netdev,x-systemd.automount,x-systemd.requires=network.target 0 0" >> /etc/fstab
             log "FSx Lustre mounted at $MOUNT_POINT"
+            FSX_MOUNTED=true
         else
             log "WARNING: Failed to mount FSx Lustre — continuing without shared storage"
         fi
     else
         log "FSx Lustre already mounted at $MOUNT_POINT"
+        FSX_MOUNTED=true
     fi
 else
     log "FSx Lustre not configured — skipping mount"
@@ -237,47 +240,68 @@ EOF
 log "Neuron environment configured"
 
 # -------------------------------------------------------------------------
-# Configure SSH
+# Configure SSH for inter-node communication
 # -------------------------------------------------------------------------
 log "--- Configuring SSH ---"
 
+CLUSTER_NAME=$(jq -r '.ClusterConfig.ClusterName // .ClusterName // empty' "$RESOURCE_CONFIG" 2>/dev/null || true)
 SSH_DIR="/root/.ssh"
 mkdir -p "$SSH_DIR"
 chmod 700 "$SSH_DIR"
 
-if [[ ! -f "$SSH_DIR/id_rsa" ]]; then
-    ssh-keygen -t rsa -b 4096 -f "$SSH_DIR/id_rsa" -N "" -q
-    cat "$SSH_DIR/id_rsa.pub" >> "$SSH_DIR/authorized_keys"
-    chmod 600 "$SSH_DIR/authorized_keys"
+if [[ "$FSX_MOUNTED" == true ]]; then
+    FSX_SSH_DIR="/fsx/.ssh-cluster"
+    mkdir -p "$FSX_SSH_DIR" 2>/dev/null || true
+    if [[ ! -f "$FSX_SSH_DIR/id_rsa" ]]; then
+        ssh-keygen -t rsa -b 4096 -f "$FSX_SSH_DIR/id_rsa" -N "" -q 2>/dev/null || true
+        cat "$FSX_SSH_DIR/id_rsa.pub" >> "$FSX_SSH_DIR/authorized_keys" 2>/dev/null || true
+        chmod 600 "$FSX_SSH_DIR/authorized_keys" "$FSX_SSH_DIR/id_rsa" 2>/dev/null || true
+        log "Generated shared SSH keypair on FSx"
+    fi
+    cp "$FSX_SSH_DIR/id_rsa" "$FSX_SSH_DIR/id_rsa.pub" "$FSX_SSH_DIR/authorized_keys" "$SSH_DIR/" 2>/dev/null || true
+    chmod 600 "$SSH_DIR/id_rsa" "$SSH_DIR/authorized_keys"
+    log "Copied shared SSH keys from FSx"
+else
+    if [[ ! -f "$SSH_DIR/id_rsa" ]]; then
+        ssh-keygen -t rsa -b 4096 -f "$SSH_DIR/id_rsa" -N "" -q
+        cat "$SSH_DIR/id_rsa.pub" >> "$SSH_DIR/authorized_keys"
+        chmod 600 "$SSH_DIR/authorized_keys"
+        log "Generated local SSH keypair"
+    fi
 fi
 
-# Add user-provided SSH public key (stored in SSM by CloudFormation)
-CLUSTER_NAME=$(jq -r '.ClusterConfig.ClusterName // .ClusterName // empty' "$RESOURCE_CONFIG" 2>/dev/null || true)
-log "Cluster name for SSM lookup: ${CLUSTER_NAME:-not found}"
+USER_SSH_KEY="none"
 if [[ -n "$CLUSTER_NAME" ]]; then
     USER_SSH_KEY=$(aws ssm get-parameter \
         --name "/hyperpod/${CLUSTER_NAME}/ssh-public-key" \
         --query "Parameter.Value" --output text 2>/dev/null || echo "none")
-else
-    USER_SSH_KEY=$(jq -r '.ssh_public_key // "none"' "$PROVISIONING_PARAMS" 2>/dev/null || echo "none")
 fi
-
-if [[ -n "$USER_SSH_KEY" && "$USER_SSH_KEY" != "none" ]]; then
-    log "Adding user-provided SSH public key to authorized_keys"
+if [[ -n "$USER_SSH_KEY" && "$USER_SSH_KEY" != "none" && "$USER_SSH_KEY" != "" ]]; then
+    log "Adding user-provided SSH public key"
     echo "$USER_SSH_KEY" >> "$SSH_DIR/authorized_keys"
-
     if id ubuntu &>/dev/null; then
         UBUNTU_SSH="/home/ubuntu/.ssh"
-        mkdir -p "$UBUNTU_SSH"
+        mkdir -p "$UBUNTU_SSH" && chmod 700 "$UBUNTU_SSH"
+        touch "$UBUNTU_SSH/authorized_keys" && chmod 600 "$UBUNTU_SSH/authorized_keys"
         echo "$USER_SSH_KEY" >> "$UBUNTU_SSH/authorized_keys"
-        chmod 700 "$UBUNTU_SSH"
-        chmod 600 "$UBUNTU_SSH/authorized_keys"
         chown -R ubuntu:ubuntu "$UBUNTU_SSH"
-        log "SSH key also added for ubuntu user"
     fi
-else
-    log "No user SSH key provided — use SSM Session Manager to access nodes"
 fi
+
+SLURM_CONF_PATH="/opt/slurm/etc/slurm.conf"
+cat > /etc/ssh/ssh_config.d/hyperpod-cluster.conf << SSHCONF
+Host 127.0.0.1 localhost $(hostname)
+    StrictHostKeyChecking no
+    HostbasedAuthentication no
+    CheckHostIP no
+    UserKnownHostsFile /dev/null
+
+Match host * exec "grep '^NodeName=%h ' $SLURM_CONF_PATH &> /dev/null"
+    StrictHostKeyChecking no
+    HostbasedAuthentication no
+    CheckHostIP no
+    UserKnownHostsFile /dev/null
+SSHCONF
 
 cat > "$SSH_DIR/config" << 'SSHCONFIG'
 Host *
@@ -286,7 +310,17 @@ Host *
     LogLevel ERROR
 SSHCONFIG
 chmod 600 "$SSH_DIR/config"
-log "SSH configured"
+
+# Set library paths globally
+cat >> /etc/environment << 'LIB_PATHS'
+LD_LIBRARY_PATH=/usr/local/cuda/lib64:/opt/amazon/openmpi/lib:/opt/amazon/efa/lib:/opt/amazon/ofi-nccl/lib:/usr/local/lib:/usr/lib
+LIB_PATHS
+cat > /etc/profile.d/hyperpod-libs.sh << 'PROFILE'
+export LD_LIBRARY_PATH=/usr/local/cuda/lib64:/opt/amazon/openmpi/lib:/opt/amazon/efa/lib:/opt/amazon/ofi-nccl/lib:/usr/local/lib:/usr/lib:${LD_LIBRARY_PATH:-}
+export PATH=/opt/slurm/bin:/opt/amazon/openmpi/bin:$PATH
+PROFILE
+chmod 644 /etc/profile.d/hyperpod-libs.sh
+log "SSH and library paths configured"
 
 # -------------------------------------------------------------------------
 # Start Slurm services
@@ -342,19 +376,38 @@ if [[ "$NODE_TYPE" == "controller" ]]; then
         fi
         sleep 2
     done
+
+    # Distribute SSH keys to workers via Slurm (if no FSx)
+    if [[ "$FSX_MOUNTED" != true ]]; then
+        log "Distributing controller SSH key to workers via Slurm..."
+        CONTROLLER_PUBKEY=$(cat "$SSH_DIR/id_rsa.pub")
+        for i in $(seq 1 60); do
+            WORKER_COUNT=$(sinfo -N -h -p gpu -t idle,alloc,mix 2>/dev/null | wc -l || echo "0")
+            [[ "$WORKER_COUNT" -gt 0 ]] && break
+            sleep 5
+        done
+        if [[ "$WORKER_COUNT" -gt 0 ]]; then
+            srun -N "$WORKER_COUNT" -p gpu bash -c "
+                mkdir -p /root/.ssh && chmod 700 /root/.ssh
+                echo '$CONTROLLER_PUBKEY' >> /root/.ssh/authorized_keys
+                chmod 600 /root/.ssh/authorized_keys
+            " 2>/dev/null && log "SSH key distributed to $WORKER_COUNT worker(s)" \
+                          || log "WARNING: Failed to distribute SSH keys"
+        fi
+    fi
 else
-    log "Starting Slurm compute daemon (slurmd)..."
+    log "Starting slurmd..."
 
     if [[ -n "$CONTROLLER_IPS" ]]; then
         log "Configuring slurmd with --conf-server $CONTROLLER_IPS"
         SLURMD_SERVICE="/etc/systemd/system/slurmd.service"
         if [[ -f "$SLURMD_SERVICE" ]]; then
             if grep -q '\$SLURMD_OPTIONS' "$SLURMD_SERVICE"; then
-                log "Injecting --conf-server via envsubst into slurmd.service"
+                log "Injecting --conf-server via envsubst"
                 SLURMD_OPTIONS="--conf-server $CONTROLLER_IPS" envsubst < "$SLURMD_SERVICE" > /tmp/slurmd.service
                 mv /tmp/slurmd.service "$SLURMD_SERVICE"
             else
-                log "No \$SLURMD_OPTIONS placeholder found, modifying ExecStart directly"
+                log "Modifying ExecStart directly"
                 sed -i "s|ExecStart=.*slurmd.*|& --conf-server $CONTROLLER_IPS|" "$SLURMD_SERVICE"
             fi
             systemctl daemon-reload
@@ -364,9 +417,19 @@ else
     systemctl enable slurmd 2>/dev/null || true
     systemctl start slurmd 2>/dev/null || log "WARNING: Could not start slurmd"
 
+    sleep 5
+    if systemctl is-active slurmd &>/dev/null; then
+        log "slurmd is running"
+    else
+        log "ERROR: slurmd failed to start"
+        journalctl -u slurmd --no-pager -n 10 2>/dev/null | while read -r line; do
+            log "  $line"
+        done
+    fi
+
     if [[ -f /etc/systemd/system/slurmctld.service ]]; then
         mv /etc/systemd/system/slurmctld.service /etc/systemd/system/slurmctld_DISABLED.service 2>/dev/null || true
-        log "Disabled slurmctld on compute node"
+        log "Disabled slurmctld on worker"
     fi
 fi
 
