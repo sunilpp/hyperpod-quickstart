@@ -565,6 +565,49 @@ NCCL_SCRIPT
     else
         log "WARNING: NCCL test binary not found on this AMI"
     fi
+
+    # Install nanoGPT training script
+    cat > /opt/slurm/bin/run-nanogpt << 'NANOGPT_SCRIPT'
+#!/bin/bash
+NODES=${1:-2}
+GPUS=${2:-1}
+
+export MASTER_ADDR=$(scontrol show hostname $SLURM_NODELIST 2>/dev/null | head -1 || hostname)
+export MASTER_PORT=29500
+
+echo "=== NanoGPT Multi-Node Training ==="
+echo "Nodes: $NODES | GPUs/node: $GPUS"
+
+srun -N $NODES --gpus-per-node=$GPUS --exclusive bash -c "
+export MASTER_ADDR=$MASTER_ADDR
+export MASTER_PORT=$MASTER_PORT
+export LD_LIBRARY_PATH=/usr/local/cuda-13.0/lib:/opt/amazon/openmpi/lib:\$LD_LIBRARY_PATH
+
+pip install torch numpy tiktoken datasets 2>/dev/null
+
+cd /tmp
+if [[ ! -d nanoGPT ]]; then
+    git clone https://github.com/karpathy/nanoGPT.git 2>/dev/null
+fi
+cd nanoGPT
+python data/shakespeare_char/prepare.py 2>/dev/null
+
+torchrun \
+    --nproc_per_node=$GPUS \
+    --nnodes=$NODES \
+    --node_rank=\$SLURM_NODEID \
+    --master_addr=$MASTER_ADDR \
+    --master_port=$MASTER_PORT \
+    train.py \
+    --dataset=shakespeare_char \
+    --n_layer=4 --n_head=4 --n_embd=128 \
+    --batch_size=8 --block_size=64 \
+    --max_iters=200 --eval_interval=50 \
+    --device=cuda --compile=False
+"
+NANOGPT_SCRIPT
+    chmod +x /opt/slurm/bin/run-nanogpt
+    log "NanoGPT test ready: run-nanogpt [nodes] [gpus-per-node]"
 fi
 
 log "=========================================="
