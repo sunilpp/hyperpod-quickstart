@@ -136,6 +136,8 @@ Resources:
           - !Ref SecurityGroupId
         EndpointPublicAccess: true
         EndpointPrivateAccess: true
+      AccessConfig:
+        AuthenticationMode: API_AND_CONFIG_MAP
       Logging:
         ClusterLogging:
           EnabledTypes:
