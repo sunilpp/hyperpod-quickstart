@@ -42,7 +42,32 @@ if ! command -v jq &>/dev/null; then
     }
 fi
 
-INSTANCE_GROUP_NAME=$(jq -r '.InstanceGroupName // "unknown"' "$RESOURCE_CONFIG")
+# Detect instance group name — try multiple config formats
+INSTANCE_GROUP_NAME=$(jq -r '.InstanceGroupName // empty' "$RESOURCE_CONFIG" 2>/dev/null || true)
+
+# If not at top level, find it by matching this instance's ID against InstanceGroups
+if [[ -z "$INSTANCE_GROUP_NAME" ]]; then
+    INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || true)
+    if [[ -n "$INSTANCE_ID" ]]; then
+        INSTANCE_GROUP_NAME=$(jq -r --arg id "$INSTANCE_ID" '
+            .InstanceGroups[]? |
+            select(.Instances[]?.InstanceId == $id) |
+            .Name // empty
+        ' "$RESOURCE_CONFIG" 2>/dev/null || true)
+    fi
+fi
+
+# Final fallback: check if this node's instance type is the controller type (ml.m5)
+if [[ -z "$INSTANCE_GROUP_NAME" ]]; then
+    CURRENT_TYPE=$(curl -s http://169.254.169.254/latest/meta-data/instance-type 2>/dev/null || true)
+    log "Could not detect instance group, instance type: $CURRENT_TYPE"
+    if echo "$CURRENT_TYPE" | grep -qi "m5"; then
+        INSTANCE_GROUP_NAME="controller-group"
+    else
+        INSTANCE_GROUP_NAME="worker-group"
+    fi
+fi
+
 log "Instance group: $INSTANCE_GROUP_NAME"
 
 if echo "$INSTANCE_GROUP_NAME" | grep -qi "controller"; then
