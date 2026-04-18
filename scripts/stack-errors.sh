@@ -16,6 +16,9 @@ set -euo pipefail
 STACK_NAME="${1:-}"
 REGION="${2:-us-west-2}"
 
+# Track visited stacks to prevent infinite recursion
+VISITED_STACKS=""
+
 if [[ -z "$STACK_NAME" ]]; then
   echo "Usage: $0 <stack-name> [region]"
   exit 1
@@ -34,6 +37,12 @@ get_root_errors() {
   local depth="${2:-0}"
   local indent=""
   for ((i=0; i<depth; i++)); do indent+="  "; done
+
+  # Prevent infinite recursion by tracking visited stacks
+  if echo "$VISITED_STACKS" | grep -qF "$stack"; then
+    return 0
+  fi
+  VISITED_STACKS="$VISITED_STACKS $stack"
 
   # Get all CREATE_FAILED events
   local events
