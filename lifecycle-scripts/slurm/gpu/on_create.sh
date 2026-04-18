@@ -25,6 +25,10 @@ log "HyperPod Lifecycle Script Starting"
 log "Orchestrator: Slurm | Compute: GPU"
 log "=========================================="
 
+# Give systemd-resolved (DNS) time to stabilize after HyperPod agent reboot
+log "Waiting 30s for DNS to stabilize..."
+sleep 30
+
 # -------------------------------------------------------------------------
 # Detect node type from HyperPod resource config
 # -------------------------------------------------------------------------
@@ -245,24 +249,39 @@ log "SSH configured"
 # -------------------------------------------------------------------------
 log "--- Starting Slurm services ---"
 
-# Wait for HyperPod to provision slurm.conf before starting daemons
-log "Waiting for slurm.conf to be provisioned by HyperPod..."
-for i in $(seq 1 120); do
-    if [[ -f /etc/slurm/slurm.conf ]]; then
-        log "slurm.conf found after ${i}s"
-        break
-    fi
-    sleep 1
-done
+# Get controller IPs from resource_config.json for configless Slurm
+CONTROLLER_IPS=$(jq -r '
+    .InstanceGroups[]? |
+    select(.Name | test("controller"; "i")) |
+    [.Instances[]?.CustomerIpAddress] | join(",")
+' "$RESOURCE_CONFIG" 2>/dev/null || true)
+log "Controller IPs: ${CONTROLLER_IPS:-not found}"
 
-if [[ ! -f /etc/slurm/slurm.conf ]]; then
-    log "WARNING: slurm.conf not found after 120s — Slurm may not start correctly"
-fi
-
+# Wait for slurm.conf to be provisioned by HyperPod (on controller only)
 if [[ "$NODE_TYPE" == "controller" ]]; then
+    SLURM_CONF="/opt/slurm/etc/slurm.conf"
+    log "Waiting for $SLURM_CONF to be provisioned by HyperPod..."
+    for i in $(seq 1 120); do
+        if [[ -f "$SLURM_CONF" ]]; then
+            log "slurm.conf found after ${i}s"
+            break
+        fi
+        sleep 1
+    done
+
+    if [[ ! -f "$SLURM_CONF" ]]; then
+        log "WARNING: slurm.conf not found after 120s"
+    fi
+
     log "Starting Slurm controller daemon (slurmctld)..."
     systemctl enable slurmctld 2>/dev/null || true
     systemctl start slurmctld 2>/dev/null || log "WARNING: Could not start slurmctld"
+
+    # Prevent slurmd from running on controller
+    if [[ -f /etc/systemd/system/slurmd.service ]]; then
+        mv /etc/systemd/system/slurmd.service /etc/systemd/system/slurmd_DISABLED.service 2>/dev/null || true
+        log "Disabled slurmd on controller node"
+    fi
 
     # Wait for controller to be ready
     for i in $(seq 1 30); do
@@ -274,8 +293,25 @@ if [[ "$NODE_TYPE" == "controller" ]]; then
     done
 else
     log "Starting Slurm compute daemon (slurmd)..."
+
+    # Workers use --conf-server to fetch config from the controller (configless mode)
+    if [[ -n "$CONTROLLER_IPS" ]]; then
+        log "Configuring slurmd with --conf-server $CONTROLLER_IPS"
+        if [[ -f /etc/systemd/system/slurmd.service ]]; then
+            SLURMD_OPTIONS="--conf-server $CONTROLLER_IPS" envsubst < /etc/systemd/system/slurmd.service > /tmp/slurmd.service
+            mv /tmp/slurmd.service /etc/systemd/system/slurmd.service
+            systemctl daemon-reload
+        fi
+    fi
+
     systemctl enable slurmd 2>/dev/null || true
     systemctl start slurmd 2>/dev/null || log "WARNING: Could not start slurmd"
+
+    # Prevent slurmctld from running on compute nodes
+    if [[ -f /etc/systemd/system/slurmctld.service ]]; then
+        mv /etc/systemd/system/slurmctld.service /etc/systemd/system/slurmctld_DISABLED.service 2>/dev/null || true
+        log "Disabled slurmctld on compute node"
+    fi
 fi
 
 # -------------------------------------------------------------------------
