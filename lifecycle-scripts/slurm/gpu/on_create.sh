@@ -567,42 +567,56 @@ NCCL_SCRIPT
     fi
 
     # Install nanoGPT training script
-    cat > /opt/slurm/bin/run-nanogpt << 'NANOGPT_SCRIPT'
+    # Detect EFA capability at install time for the training script
+    HAS_EFA_RDMA="false"
+    if command -v fi_info &>/dev/null && fi_info -p efa -c FI_EP_RDM 2>/dev/null | grep -q "provider: efa"; then
+        HAS_EFA_RDMA="true"
+    fi
+
+    cat > /opt/slurm/bin/run-nanogpt << NANOGPT_SCRIPT
 #!/bin/bash
-NODES=${1:-2}
-GPUS=${2:-1}
+NODES=\${1:-2}
+GPUS=\${2:-1}
 MASTER_PORT=29500
 
 echo "=== NanoGPT Multi-Node Training ==="
-echo "Nodes: $NODES | GPUs/node: $GPUS"
+echo "Nodes: \$NODES | GPUs/node: \$GPUS"
 
-srun -N $NODES --gpus-per-node=$GPUS --exclusive bash -c "
-MASTER_ADDR=\$(scontrol show hostname \$SLURM_NODELIST | head -1)
-export LD_LIBRARY_PATH=/usr/local/cuda-13.0/lib:/opt/amazon/openmpi/lib:\$LD_LIBRARY_PATH
+# Detect backend: NCCL for EFA instances, Gloo for non-EFA
+BACKEND_ARG=""
+EXPORT_ARGS="ALL"
+if [[ "${HAS_EFA_RDMA}" == "true" ]]; then
+    echo "Backend: NCCL (EFA RDMA)"
+else
+    echo "Backend: Gloo (TCP)"
+    BACKEND_ARG="--backend=gloo"
+    EXPORT_ARGS="ALL,NCCL_NET_PLUGIN=none,NCCL_SOCKET_IFNAME=ens6,FI_EFA_USE_DEVICE_RDMA=0"
+fi
 
+# Setup: install deps and prepare data on all nodes
+srun -N \$NODES --gpus-per-node=\$GPUS bash -c "
 pip install torch numpy tiktoken datasets 2>/dev/null
-
-cd /tmp
-git clone https://github.com/karpathy/nanoGPT.git 2>/dev/null || true
-cd /tmp/nanoGPT
-python data/shakespeare_char/prepare.py 2>/dev/null
-
-torchrun \
-    --nproc_per_node=$GPUS \
-    --nnodes=$NODES \
-    --node_rank=\$SLURM_NODEID \
-    --master_addr=\$MASTER_ADDR \
-    --master_port=$MASTER_PORT \
-    train.py \
-    --dataset=shakespeare_char \
-    --n_layer=4 --n_head=4 --n_embd=128 \
-    --batch_size=8 --block_size=64 \
-    --max_iters=200 --eval_interval=50 \
-    --device=cuda --compile=False
+apt-get install -y -qq git 2>/dev/null
+cd /tmp && git clone https://github.com/karpathy/nanoGPT.git 2>/dev/null || true
+cd /tmp/nanoGPT && python3 data/shakespeare_char/prepare.py 2>/dev/null
+echo 'Setup complete on \$(hostname)'
 "
+
+# Train across all nodes
+srun -N \$NODES --gpus-per-node=\$GPUS --exclusive --export=\$EXPORT_ARGS bash -c '
+MASTER_ADDR=\$(scontrol show hostname \$SLURM_NODELIST | head -1)
+cd /tmp/nanoGPT
+torchrun --nproc_per_node=$GPUS --nnodes='"\$NODES"' --node_rank=\$SLURM_NODEID --master_addr=\$MASTER_ADDR --master_port=$MASTER_PORT train.py --dataset=shakespeare_char --n_layer=4 --n_head=4 --n_embd=128 --batch_size=8 --block_size=64 --max_iters=200 --eval_interval=50 --device=cuda --compile=False '\$BACKEND_ARG'
+'
 NANOGPT_SCRIPT
     chmod +x /opt/slurm/bin/run-nanogpt
     log "NanoGPT test ready: run-nanogpt [nodes] [gpus-per-node]"
+
+    # Make commands available in SSM sessions (SSM uses sh, not bash login shell)
+    # Symlink to /usr/local/bin which is in PATH for all shells
+    ln -sf /opt/slurm/bin/run-nccl-test /usr/local/bin/run-nccl-test
+    ln -sf /opt/slurm/bin/run-nanogpt /usr/local/bin/run-nanogpt
+    log "Commands available: run-nccl-test, run-nanogpt"
 fi
 
 log "=========================================="

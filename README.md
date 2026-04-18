@@ -176,15 +176,31 @@ kubectl get nodes
 kubectl get pods -A
 ```
 
-### 5. Run NCCL benchmark
+### 5. Run NCCL benchmark and training test
+
+Both commands are pre-installed on the Slurm controller and auto-detect EFA vs TCP:
 
 ```bash
-# Slurm: pre-installed on controller — just type:
+# NCCL all-reduce benchmark (validates GPU-to-GPU networking)
 run-nccl-test 2 1
 
-# EKS: submit MPIJob
+# nanoGPT multi-node training (validates distributed training end-to-end)
+run-nanogpt 2 1
+```
+
+**EKS clusters:**
+```bash
 ./scripts/run-nccl-test-eks.sh my-hyperpod-eks-eks-cluster 2 1 us-west-2
 ```
+
+**Instance type support:**
+
+| Instance | EFA | NCCL Transport | Training Backend | Expected Bandwidth |
+|----------|-----|---------------|-----------------|-------------------|
+| g5.16xlarge | No | TCP sockets | Gloo | ~3 GB/s |
+| g5.48xlarge | Yes | EFA SENDRECV | NCCL | ~12 GB/s |
+| p4d.24xlarge | Yes | EFA RDMA | NCCL | ~400 GB/s |
+| p5.48xlarge | Yes | EFA RDMA | NCCL | ~400 GB/s |
 
 ### 6. Submit your first training job
 
