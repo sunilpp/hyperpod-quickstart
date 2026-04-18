@@ -249,6 +249,16 @@ log "SSH configured"
 # -------------------------------------------------------------------------
 log "--- Starting Slurm services ---"
 
+# Ensure MUNGE is running (required for Slurm authentication)
+log "Verifying MUNGE authentication daemon..."
+if systemctl is-active munge &>/dev/null; then
+    log "MUNGE is running"
+else
+    log "Starting MUNGE..."
+    systemctl enable munge 2>/dev/null || true
+    systemctl start munge 2>/dev/null || log "WARNING: Could not start MUNGE"
+fi
+
 # Get controller IPs from resource_config.json for configless Slurm
 CONTROLLER_IPS=$(jq -r '
     .InstanceGroups[]? |
@@ -257,8 +267,8 @@ CONTROLLER_IPS=$(jq -r '
 ' "$RESOURCE_CONFIG" 2>/dev/null || true)
 log "Controller IPs: ${CONTROLLER_IPS:-not found}"
 
-# Wait for slurm.conf to be provisioned by HyperPod (on controller only)
 if [[ "$NODE_TYPE" == "controller" ]]; then
+    # Wait for slurm.conf to be provisioned by HyperPod
     SLURM_CONF="/opt/slurm/etc/slurm.conf"
     log "Waiting for $SLURM_CONF to be provisioned by HyperPod..."
     for i in $(seq 1 120); do
@@ -297,9 +307,18 @@ else
     # Workers use --conf-server to fetch config from the controller (configless mode)
     if [[ -n "$CONTROLLER_IPS" ]]; then
         log "Configuring slurmd with --conf-server $CONTROLLER_IPS"
-        if [[ -f /etc/systemd/system/slurmd.service ]]; then
-            SLURMD_OPTIONS="--conf-server $CONTROLLER_IPS" envsubst < /etc/systemd/system/slurmd.service > /tmp/slurmd.service
-            mv /tmp/slurmd.service /etc/systemd/system/slurmd.service
+        SLURMD_SERVICE="/etc/systemd/system/slurmd.service"
+        if [[ -f "$SLURMD_SERVICE" ]]; then
+            if grep -q '\$SLURMD_OPTIONS' "$SLURMD_SERVICE"; then
+                # Service file has $SLURMD_OPTIONS placeholder — use envsubst
+                log "Injecting --conf-server via envsubst into slurmd.service"
+                SLURMD_OPTIONS="--conf-server $CONTROLLER_IPS" envsubst < "$SLURMD_SERVICE" > /tmp/slurmd.service
+                mv /tmp/slurmd.service "$SLURMD_SERVICE"
+            else
+                # No placeholder — inject --conf-server directly into ExecStart
+                log "No \$SLURMD_OPTIONS placeholder found, modifying ExecStart directly"
+                sed -i "s|ExecStart=.*slurmd.*|& --conf-server $CONTROLLER_IPS|" "$SLURMD_SERVICE"
+            fi
             systemctl daemon-reload
         fi
     fi
