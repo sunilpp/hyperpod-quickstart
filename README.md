@@ -57,16 +57,20 @@ Each stack creates a complete, ready-to-use environment:
 ### Included out of the box
 
 - **Networking** — VPC, private/public subnets, NAT gateway, VPC endpoints
-- **Shared storage** — FSx for Lustre high-performance filesystem
-- **Monitoring** — Amazon Managed Prometheus + Grafana with pre-built dashboards
-- **Health checks** — Automatic post-deployment validation (subnet, security group, node health)
-- **Benchmarks** — Optional NCCL/NCCOM performance tests to verify cluster networking
+- **Shared storage** — FSx for Lustre with auto-discovery (nodes mount automatically)
+- **Lifecycle scripts** — Automatic node type detection, Slurm configless setup, SSH key distribution, MUNGE auth
+- **NCCL benchmarks** — Pre-installed `run-nccl-test` on controller, auto-detects EFA vs TCP
+- **EKS Helm automation** — HyperPod dependencies installed via Lambda (no manual helm install)
+- **Monitoring** — Amazon Managed Prometheus + Grafana with pre-built dashboards (optional)
+- **Health checks** — Post-deployment validation of cluster, subnet, security group (optional)
+- **Diagnostics** — Quota checker, stack error driller, lifecycle log viewer
 
 ## Prerequisites
 
 1. **AWS Account** with [SageMaker HyperPod access](https://docs.aws.amazon.com/sagemaker/latest/dg/sagemaker-hyperpod.html) in a [supported region](https://docs.aws.amazon.com/general/latest/gr/sagemaker.html)
-2. **Service quota** for your chosen instance type ([request increase](https://console.aws.amazon.com/servicequotas/home))
-3. **IAM Identity Center** (AWS SSO) enabled — required for Grafana access
+2. **Service quota** for your chosen instance type — run `./scripts/check-quotas.sh` to verify
+3. **S3 bucket** for CloudFormation template packaging
+4. **IAM Identity Center** (AWS SSO) enabled — required for Grafana access (if observability enabled)
 
 That's it. No CLI tools, no local setup required.
 
@@ -74,9 +78,14 @@ That's it. No CLI tools, no local setup required.
 
 ## Quick Start
 
-### 1. Launch the stack
+### 0. Check prerequisites
 
-The fastest way to deploy is the launch script, which packages templates, uploads them to S3, and opens the CloudFormation console with everything pre-filled so you can review parameters and click **Create stack**:
+```bash
+# Verify your AWS quotas before deploying
+./scripts/check-quotas.sh ml.g5.16xlarge 2 us-west-2
+```
+
+### 1. Launch the stack
 
 ```bash
 # Create an S3 bucket for templates (one-time setup)
@@ -86,7 +95,9 @@ aws s3 mb s3://YOUR_S3_BUCKET --region us-west-2
 ./scripts/deploy.sh slurm-gpu YOUR_S3_BUCKET us-west-2
 ```
 
-The script supports all four variants: `slurm-gpu`, `slurm-trainium`, `eks-gpu`, `eks-trainium`.
+The script packages templates, uploads lifecycle scripts to S3, and opens the CloudFormation console with parameters pre-filled. Review and click **Create stack**.
+
+Supports all four variants: `slurm-gpu`, `slurm-trainium`, `eks-gpu`, `eks-trainium`.
 
 <details>
 <summary><b>Alternative: Manual CLI deployment</b></summary>
@@ -144,10 +155,13 @@ Once the stack shows `CREATE_COMPLETE`, find these in the **Outputs** tab:
 
 **For Slurm clusters:**
 ```bash
-# Connect via SSM Session Manager
-aws ssm start-session --target <controller-instance-id>
+# Connect via SSM (from your local machine)
+./scripts/remote-nccl-test.sh my-hyperpod-slurm us-west-2
 
-# Check cluster status
+# Or connect via AWS console: Systems Manager > Session Manager
+# Target format: sagemaker-cluster:<cluster-id>_controller-group-<instance-id>
+
+# On the controller, check cluster status
 sinfo
 squeue
 ```
@@ -162,7 +176,17 @@ kubectl get nodes
 kubectl get pods -A
 ```
 
-### 5. Submit your first job
+### 5. Run NCCL benchmark
+
+```bash
+# Slurm: pre-installed on controller — just type:
+run-nccl-test 2 1
+
+# EKS: submit MPIJob
+./scripts/run-nccl-test-eks.sh my-hyperpod-eks-eks-cluster 2 1 us-west-2
+```
+
+### 6. Submit your first training job
 
 ```bash
 # Slurm + GPU example
@@ -176,6 +200,16 @@ sbatch examples/submit-neuron-job/slurm/submit.sh
 ```
 
 See [Running Your First Job](docs/05-running-first-job.md) for detailed walkthrough.
+
+### Troubleshooting
+
+```bash
+# Check stack errors (drills into nested stacks)
+./scripts/stack-errors.sh my-hyperpod us-west-2
+
+# Check lifecycle script logs (on controller via SSM)
+cat /var/log/hyperpod/on_create.log
+```
 
 ## Repository Structure
 
@@ -196,10 +230,24 @@ hyperpod-quickstart/
 │   ├── observability/          #   Prometheus, Grafana, dashboards
 │   ├── validation/             #   Post-deploy health checks
 │   └── benchmarking/           #   NCCL/NCCOM performance tests
-├── scripts/                    # Deploy helper (packages + opens CF console)
+├── scripts/                    # Operational scripts
+│   ├── deploy.sh               #   Package, upload, open CF console
+│   ├── check-quotas.sh         #   Verify AWS service quotas
+│   ├── stack-errors.sh         #   Diagnose CloudFormation failures
+│   ├── remote-nccl-test.sh     #   SSM into controller for testing
+│   ├── run-nccl-test.sh        #   Standalone NCCL benchmark
+│   ├── run-nccl-test-eks.sh    #   EKS NCCL benchmark via MPIJob
+│   └── install-eks-hyperpod-deps.sh  # Manual EKS Helm fallback
 ├── lifecycle-scripts/          # Node initialization scripts
+│   ├── slurm/gpu/              #   GPU Slurm lifecycle + NCCL test
+│   ├── slurm/trainium/         #   Trainium Slurm lifecycle
+│   └── eks/                    #   EKS lifecycle (minimal)
 ├── lambda/                     # Custom resource Lambda functions
-├── examples/                   # Sample training job submissions
+├── examples/                   # Sample jobs + NCCL benchmarks
+│   ├── nccl-test/              #   NCCL test (Slurm sbatch + EKS MPIJob)
+│   ├── submit-pytorch-job/     #   PyTorch distributed training
+│   ├── submit-nemo-job/        #   NeMo GPT pretraining
+│   └── submit-neuron-job/      #   Neuron/Trainium training
 └── docs/                       # Comprehensive documentation
 ```
 
