@@ -337,12 +337,16 @@ fi
 # Set NCCL environment variables for optimal GPU communication
 # -------------------------------------------------------------------------
 log "--- Configuring NCCL environment ---"
+# Note: Do NOT set NCCL_ALGO, NCCL_PROTO, or NCCL_TREE_THRESHOLD —
+# per AWS docs these degrade performance. Let NCCL auto-tune.
 cat >> /etc/environment << 'NCCL_ENV'
-NCCL_PROTO=simple
-NCCL_ALGO=ring,tree
 NCCL_DEBUG=WARN
+NCCL_BUFFSIZE=8388608
+NCCL_P2P_NET_CHUNKSIZE=524288
+NCCL_SOCKET_IFNAME=^docker,lo,veth
 FI_PROVIDER=efa
 FI_EFA_USE_DEVICE_RDMA=1
+FI_EFA_FORK_SAFE=1
 NCCL_ENV
 
 log "=========================================="
