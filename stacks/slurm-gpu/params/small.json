@@ -1,8 +1,34 @@
 [
-  { "ParameterKey": "ClusterName", "ParameterValue": "my-hyperpod" },
-  { "ParameterKey": "ClusterSize", "ParameterValue": "small" },
-  { "ParameterKey": "AvailabilityZoneId", "ParameterValue": "usw2-az2" },
-  { "ParameterKey": "EnableObservability", "ParameterValue": "true" },
-  { "ParameterKey": "EnableValidation", "ParameterValue": "true" },
-  { "ParameterKey": "RunBenchmarks", "ParameterValue": "false" }
+  {
+    "ParameterKey": "ClusterName",
+    "ParameterValue": "my-hyperpod"
+  },
+  {
+    "ParameterKey": "ClusterSize",
+    "ParameterValue": "small"
+  },
+  {
+    "ParameterKey": "AvailabilityZoneId",
+    "ParameterValue": "usw2-az2"
+  },
+  {
+    "ParameterKey": "EnableObservability",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "EnableValidation",
+    "ParameterValue": "true"
+  },
+  {
+    "ParameterKey": "RunBenchmarks",
+    "ParameterValue": "false"
+  },
+  {
+    "ParameterKey": "LifecycleScriptSourceBucket",
+    "ParameterValue": "YOUR_S3_BUCKET"
+  },
+  {
+    "ParameterKey": "LifecycleScriptSourcePrefix",
+    "ParameterValue": "hyperpod-quickstart/STACK_VARIANT/lifecycle-scripts"
+  }
 ]

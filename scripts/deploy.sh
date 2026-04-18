@@ -69,13 +69,30 @@ aws s3 cp "${PACKAGED_FILE}" \
   "s3://${S3_BUCKET}/${S3_PREFIX}/template.yaml" \
   --region "${REGION}"
 
+# ── Upload lifecycle scripts to S3 ─────────────────────────────────
+LIFECYCLE_PREFIX="${S3_PREFIX}/lifecycle-scripts"
+
+# Determine which lifecycle scripts to upload based on variant
+case "${STACK_VARIANT}" in
+  slurm-gpu)
+    SCRIPTS_DIR="${REPO_ROOT}/lifecycle-scripts/slurm/gpu" ;;
+  slurm-trainium)
+    SCRIPTS_DIR="${REPO_ROOT}/lifecycle-scripts/slurm/trainium" ;;
+  eks-gpu|eks-trainium)
+    SCRIPTS_DIR="${REPO_ROOT}/lifecycle-scripts/eks" ;;
+esac
+
+echo "Uploading lifecycle scripts from ${SCRIPTS_DIR}..."
+aws s3 sync "${SCRIPTS_DIR}/" "s3://${S3_BUCKET}/${LIFECYCLE_PREFIX}/" \
+  --region "${REGION}"
+
 # ── Build CloudFormation console URL ────────────────────────────────
 TEMPLATE_URL="https://s3.amazonaws.com/${S3_BUCKET}/${S3_PREFIX}/template.yaml"
 
 # URL-encode the template URL (only special characters)
 ENCODED_TEMPLATE_URL=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${TEMPLATE_URL}', safe=''))")
 
-CONSOLE_URL="https://${REGION}.console.aws.amazon.com/cloudformation/home?region=${REGION}#/stacks/create/review?templateURL=${ENCODED_TEMPLATE_URL}&stackName=${STACK_NAME}"
+CONSOLE_URL="https://${REGION}.console.aws.amazon.com/cloudformation/home?region=${REGION}#/stacks/create/review?templateURL=${ENCODED_TEMPLATE_URL}&stackName=${STACK_NAME}&param_LifecycleScriptSourceBucket=${S3_BUCKET}&param_LifecycleScriptSourcePrefix=${LIFECYCLE_PREFIX}"
 
 echo ""
 echo "============================================================"

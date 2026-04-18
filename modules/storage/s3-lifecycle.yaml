@@ -15,6 +15,14 @@ Parameters:
     Default: ""
     Description: ARN of the SageMaker execution role (for bucket policy).
 
+  LifecycleScriptSourceBucket:
+    Type: String
+    Description: S3 bucket containing the lifecycle scripts to copy.
+
+  LifecycleScriptSourcePrefix:
+    Type: String
+    Description: S3 key prefix for lifecycle scripts in the source bucket.
+
 Conditions:
   HasSageMakerRole: !Not [!Equals [!Ref SageMakerRoleArn, ""]]
 
@@ -56,6 +64,109 @@ Resources:
             Resource:
               - !GetAtt LifecycleScriptsBucket.Arn
               - !Sub "${LifecycleScriptsBucket.Arn}/*"
+
+  # -------------------------------------------------------------------------
+  # Upload lifecycle scripts from source bucket to lifecycle bucket
+  # -------------------------------------------------------------------------
+  UploadFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourceNamePrefix}-lifecycle-upload-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+      Policies:
+        - PolicyName: S3CopyAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:${AWS::Partition}:s3:::${LifecycleScriptSourceBucket}"
+                  - !Sub "arn:${AWS::Partition}:s3:::${LifecycleScriptSourceBucket}/*"
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !GetAtt LifecycleScriptsBucket.Arn
+                  - !Sub "${LifecycleScriptsBucket.Arn}/*"
+
+  UploadFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ResourceNamePrefix}-lifecycle-upload"
+      Runtime: python3.12
+      Handler: index.handler
+      Timeout: 120
+      Role: !GetAtt UploadFunctionRole.Arn
+      Code:
+        ZipFile: |
+          import json
+          import logging
+          import boto3
+          import cfnresponse
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+          s3 = boto3.client("s3")
+
+          def handler(event, context):
+              logger.info(json.dumps(event))
+              try:
+                  props = event.get("ResourceProperties", {})
+                  src_bucket = props["SourceBucket"]
+                  src_prefix = props["SourcePrefix"].rstrip("/") + "/"
+                  dst_bucket = props["DestBucket"]
+                  dst_prefix = props.get("DestPrefix", "lifecycle-scripts").rstrip("/") + "/"
+
+                  if event["RequestType"] in ("Create", "Update"):
+                      resp = s3.list_objects_v2(Bucket=src_bucket, Prefix=src_prefix)
+                      copied = 0
+                      for obj in resp.get("Contents", []):
+                          src_key = obj["Key"]
+                          filename = src_key[len(src_prefix):]
+                          if not filename:
+                              continue
+                          dst_key = dst_prefix + filename
+                          s3.copy_object(
+                              CopySource={"Bucket": src_bucket, "Key": src_key},
+                              Bucket=dst_bucket, Key=dst_key
+                          )
+                          logger.info(f"Copied {src_key} -> s3://{dst_bucket}/{dst_key}")
+                          copied += 1
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS,
+                                       {"CopiedFiles": str(copied)})
+
+                  elif event["RequestType"] == "Delete":
+                      resp = s3.list_objects_v2(Bucket=dst_bucket, Prefix=dst_prefix)
+                      for obj in resp.get("Contents", []):
+                          s3.delete_object(Bucket=dst_bucket, Key=obj["Key"])
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+
+              except Exception as e:
+                  logger.error(str(e), exc_info=True)
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {"Error": str(e)})
+
+  UploadLifecycleScripts:
+    Type: Custom::LifecycleUpload
+    DependsOn: LifecycleScriptsBucket
+    Properties:
+      ServiceToken: !GetAtt UploadFunction.Arn
+      SourceBucket: !Ref LifecycleScriptSourceBucket
+      SourcePrefix: !Ref LifecycleScriptSourcePrefix
+      DestBucket: !Ref LifecycleScriptsBucket
+      DestPrefix: lifecycle-scripts
 
 Outputs:
   BucketName:

@@ -30,6 +30,11 @@ Metadata:
           - EnableObservability
           - EnableValidation
           - RunBenchmarks
+      - Label:
+          default: Lifecycle Scripts Source
+        Parameters:
+          - LifecycleScriptSourceBucket
+          - LifecycleScriptSourcePrefix
 
 Parameters:
   ClusterName:
@@ -96,6 +101,14 @@ Parameters:
     Default: "false"
     AllowedValues: ["true", "false"]
     Description: Run NCCL performance benchmarks after deployment.
+
+  LifecycleScriptSourceBucket:
+    Type: String
+    Description: S3 bucket where lifecycle scripts were uploaded by deploy.sh.
+
+  LifecycleScriptSourcePrefix:
+    Type: String
+    Description: S3 key prefix for lifecycle scripts in the source bucket.
 
 Mappings:
   ClusterSizeMap:
@@ -164,6 +177,8 @@ Resources:
       TemplateURL: ../../modules/storage/s3-lifecycle.yaml
       Parameters:
         ResourceNamePrefix: !Ref ClusterName
+        LifecycleScriptSourceBucket: !Ref LifecycleScriptSourceBucket
+        LifecycleScriptSourcePrefix: !Ref LifecycleScriptSourcePrefix
 
   # =========================================================================
   # IAM
