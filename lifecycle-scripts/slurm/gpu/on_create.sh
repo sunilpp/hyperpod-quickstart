@@ -378,9 +378,13 @@ if [[ "$NODE_TYPE" == "controller" ]]; then
         log "Distributing controller SSH key to workers via Slurm..."
         CONTROLLER_PUBKEY=$(cat "$SSH_DIR/id_rsa.pub")
 
+        # Auto-detect the worker partition name
+        WORKER_PARTITION=$(sinfo -h -o "%P" 2>/dev/null | grep -v "^dev" | head -1 | tr -d '*' || echo "")
+        log "Worker partition: ${WORKER_PARTITION:-not found}"
+
         # Wait for at least one worker to register
         for i in $(seq 1 60); do
-            WORKER_COUNT=$(sinfo -N -h -p gpu -t idle,alloc,mix 2>/dev/null | wc -l || echo "0")
+            WORKER_COUNT=$(sinfo -N -h ${WORKER_PARTITION:+-p $WORKER_PARTITION} -t idle,alloc,mix 2>/dev/null | wc -l || echo "0")
             if [[ "$WORKER_COUNT" -gt 0 ]]; then
                 log "Found $WORKER_COUNT worker(s) registered"
                 break
@@ -390,7 +394,7 @@ if [[ "$NODE_TYPE" == "controller" ]]; then
 
         if [[ "$WORKER_COUNT" -gt 0 ]]; then
             # Push controller's public key to all workers
-            srun -N "$WORKER_COUNT" -p gpu bash -c "
+            srun -N "$WORKER_COUNT" ${WORKER_PARTITION:+-p $WORKER_PARTITION} bash -c "
                 mkdir -p /root/.ssh && chmod 700 /root/.ssh
                 echo '$CONTROLLER_PUBKEY' >> /root/.ssh/authorized_keys
                 chmod 600 /root/.ssh/authorized_keys
@@ -398,7 +402,7 @@ if [[ "$NODE_TYPE" == "controller" ]]; then
                           || log "WARNING: Failed to distribute SSH keys"
 
             # Also get each worker's public key and add to controller
-            srun -N "$WORKER_COUNT" -p gpu bash -c "cat /root/.ssh/id_rsa.pub" 2>/dev/null | while read -r key; do
+            srun -N "$WORKER_COUNT" ${WORKER_PARTITION:+-p $WORKER_PARTITION} bash -c "cat /root/.ssh/id_rsa.pub" 2>/dev/null | while read -r key; do
                 if [[ -n "$key" ]]; then
                     echo "$key" >> "$SSH_DIR/authorized_keys"
                 fi

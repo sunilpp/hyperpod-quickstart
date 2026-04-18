@@ -29,6 +29,25 @@ log "Waiting 30s for DNS to stabilize..."
 sleep 30
 
 # -------------------------------------------------------------------------
+# Helper: get instance metadata (supports IMDSv2)
+# -------------------------------------------------------------------------
+get_metadata() {
+    local path="$1"
+    local token
+    token=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
+        -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null || true)
+    if [[ -n "$token" ]]; then
+        curl -s -H "X-aws-ec2-metadata-token: $token" \
+            "http://169.254.169.254/latest/meta-data/$path" 2>/dev/null || true
+    else
+        curl -s "http://169.254.169.254/latest/meta-data/$path" 2>/dev/null || true
+    fi
+}
+
+AWS_REGION=$(get_metadata "placement/region")
+log "Region: ${AWS_REGION:-unknown}"
+
+# -------------------------------------------------------------------------
 # Detect node type
 # -------------------------------------------------------------------------
 RESOURCE_CONFIG="/opt/ml/config/resource_config.json"
@@ -128,12 +147,10 @@ if [[ -z "$FSX_DNS" || "$FSX_DNS" == *"PLACEHOLDER"* ]]; then
     CLUSTER_PREFIX="${CLUSTER_PREFIX%%-slurm}"
     CLUSTER_PREFIX="${CLUSTER_PREFIX%%-eks}"
 
-    if [[ -n "$CLUSTER_PREFIX" ]]; then
+    if [[ -n "$CLUSTER_PREFIX" && -n "$AWS_REGION" ]]; then
         FSX_INFO=$(aws fsx describe-file-systems \
             --query "FileSystems[?Tags[?Key=='Name' && contains(Value, '${CLUSTER_PREFIX}')]].{DNS:DNSName,Mount:LustreConfiguration.MountName}" \
-            --output json --region "$(curl -s http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null || \
-            curl -s -H "X-aws-ec2-metadata-token: $(curl -s -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')" \
-            http://169.254.169.254/latest/meta-data/placement/region)" 2>/dev/null || true)
+            --output json --region "$AWS_REGION" 2>/dev/null || true)
 
         if [[ -n "$FSX_INFO" ]]; then
             FSX_DNS=$(echo "$FSX_INFO" | jq -r '.[0].DNS // empty' 2>/dev/null || true)
@@ -381,18 +398,31 @@ if [[ "$NODE_TYPE" == "controller" ]]; then
     if [[ "$FSX_MOUNTED" != true ]]; then
         log "Distributing controller SSH key to workers via Slurm..."
         CONTROLLER_PUBKEY=$(cat "$SSH_DIR/id_rsa.pub")
+
+        # Auto-detect the worker partition name
+        WORKER_PARTITION=$(sinfo -h -o "%P" 2>/dev/null | grep -v "^dev" | head -1 | tr -d '*' || echo "")
+        log "Worker partition: ${WORKER_PARTITION:-not found}"
+
         for i in $(seq 1 60); do
-            WORKER_COUNT=$(sinfo -N -h -p gpu -t idle,alloc,mix 2>/dev/null | wc -l || echo "0")
+            WORKER_COUNT=$(sinfo -N -h ${WORKER_PARTITION:+-p $WORKER_PARTITION} -t idle,alloc,mix 2>/dev/null | wc -l || echo "0")
             [[ "$WORKER_COUNT" -gt 0 ]] && break
             sleep 5
         done
         if [[ "$WORKER_COUNT" -gt 0 ]]; then
-            srun -N "$WORKER_COUNT" -p gpu bash -c "
+            srun -N "$WORKER_COUNT" ${WORKER_PARTITION:+-p $WORKER_PARTITION} bash -c "
                 mkdir -p /root/.ssh && chmod 700 /root/.ssh
                 echo '$CONTROLLER_PUBKEY' >> /root/.ssh/authorized_keys
                 chmod 600 /root/.ssh/authorized_keys
             " 2>/dev/null && log "SSH key distributed to $WORKER_COUNT worker(s)" \
                           || log "WARNING: Failed to distribute SSH keys"
+
+            # Collect worker public keys back to controller
+            srun -N "$WORKER_COUNT" ${WORKER_PARTITION:+-p $WORKER_PARTITION} bash -c "cat /root/.ssh/id_rsa.pub" 2>/dev/null | while read -r key; do
+                if [[ -n "$key" ]]; then
+                    echo "$key" >> "$SSH_DIR/authorized_keys"
+                fi
+            done
+            log "Worker SSH keys collected"
         fi
     fi
 else
