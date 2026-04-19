@@ -50,6 +50,8 @@ Resources:
         - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSageMakerClusterInstanceRolePolicy"
         # SSM Session Manager — required for SSH access to cluster nodes
         - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        # VPC CNI — required for EKS pod networking (ENI management, IP allocation)
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/AmazonEKS_CNI_Policy"
       Policies:
         # S3 access for lifecycle scripts
         - PolicyName: !Sub "${ResourceNamePrefix}-lifecycle-s3"
