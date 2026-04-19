@@ -39,13 +39,25 @@ Resources:
       SourceSecurityGroupId: !Ref SecurityGroup
       Description: Allow all traffic from instances in this security group (EFA + inter-node)
 
-  SecurityGroupEgress:
+  # Self-referencing egress: REQUIRED for EFA health checks.
+  # Per AWS docs: "avoid using 0.0.0.0/0 for outbound rules, as this
+  # may cause EFA health check failures"
+  SecurityGroupSelfEgress:
+    Type: AWS::EC2::SecurityGroupEgress
+    Properties:
+      GroupId: !Ref SecurityGroup
+      IpProtocol: "-1"
+      DestinationSecurityGroupId: !Ref SecurityGroup
+      Description: Allow all traffic to instances in this security group (EFA)
+
+  # Internet egress for NAT gateway, package downloads, AWS APIs
+  SecurityGroupInternetEgress:
     Type: AWS::EC2::SecurityGroupEgress
     Properties:
       GroupId: !Ref SecurityGroup
       IpProtocol: "-1"
       CidrIp: "0.0.0.0/0"
-      Description: Allow all outbound traffic (NAT gateway, package downloads, AWS APIs)
+      Description: All outbound for NAT gateway, package downloads, AWS APIs
 
 Outputs:
   SecurityGroupId:
