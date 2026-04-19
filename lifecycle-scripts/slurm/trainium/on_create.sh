@@ -65,20 +65,6 @@ if ! command -v jq &>/dev/null; then
     }
 fi
 
-# Helper: get instance metadata (supports both IMDSv1 and IMDSv2)
-get_metadata() {
-    local path="$1"
-    local token
-    token=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
-        -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null || true)
-    if [[ -n "$token" ]]; then
-        curl -s -H "X-aws-ec2-metadata-token: $token" \
-            "http://169.254.169.254/latest/meta-data/$path" 2>/dev/null || true
-    else
-        curl -s "http://169.254.169.254/latest/meta-data/$path" 2>/dev/null || true
-    fi
-}
-
 # Detect instance group name — try multiple config formats
 INSTANCE_GROUP_NAME=$(jq -r '.InstanceGroupName // empty' "$RESOURCE_CONFIG" 2>/dev/null || true)
 

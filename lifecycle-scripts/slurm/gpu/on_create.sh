@@ -537,7 +537,7 @@ cat "\$HOSTFILE" | sed 's/^/  /'
 EFA_ARGS=""
 NCCL_NET_ARGS=""
 MCA_ARGS="--mca pml ob1 --mca btl tcp,self --mca btl_tcp_if_exclude lo,docker0"
-if command -v fi_info &>/dev/null && fi_info -p efa -c FI_EP_RDM 2>/dev/null | grep -q "provider: efa"; then
+if command -v fi_info &>/dev/null && fi_info -p efa 2>/dev/null | grep -q "FI_EP_RDM"; then
     EFA_ARGS="-x FI_PROVIDER=efa -x FI_EFA_USE_DEVICE_RDMA=1 -x FI_EFA_FORK_SAFE=1"
     NCCL_NET_ARGS=""
     echo "Transport: EFA RDMA"
@@ -569,7 +569,7 @@ NCCL_SCRIPT
     # Install nanoGPT training script
     # Detect EFA capability at install time for the training script
     HAS_EFA_RDMA="false"
-    if command -v fi_info &>/dev/null && fi_info -p efa -c FI_EP_RDM 2>/dev/null | grep -q "provider: efa"; then
+    if command -v fi_info &>/dev/null && fi_info -p efa 2>/dev/null | grep -q "FI_EP_RDM"; then
         HAS_EFA_RDMA="true"
     fi
 
@@ -606,7 +606,7 @@ echo 'Setup complete on \$(hostname)'
 srun -N \$NODES --gpus-per-node=\$GPUS --exclusive --export=\$EXPORT_ARGS bash -c "
 MASTER_ADDR=\\\$(scontrol show hostname \\\$SLURM_NODELIST | head -1)
 cd /tmp/nanoGPT
-torchrun --nproc_per_node=\$GPUS --nnodes=\$NODES --node_rank=\\\$SLURM_NODEID --master_addr=\\\$MASTER_ADDR --master_port=$MASTER_PORT train.py --dataset=shakespeare_char --n_layer=4 --n_head=4 --n_embd=128 --batch_size=8 --block_size=64 --max_iters=200 --eval_interval=50 --device=cuda --compile=False \$BACKEND_ARG
+torchrun --nproc_per_node=\$GPUS --nnodes=\$NODES --node_rank=\\\$SLURM_NODEID --master_addr=\\\$MASTER_ADDR --master_port=\$MASTER_PORT train.py --dataset=shakespeare_char --n_layer=4 --n_head=4 --n_embd=128 --batch_size=8 --block_size=64 --max_iters=200 --eval_interval=50 --device=cuda --compile=False \$BACKEND_ARG
 "
 NANOGPT_SCRIPT
     chmod +x /opt/slurm/bin/run-nanogpt
