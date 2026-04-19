@@ -19,6 +19,7 @@ Resources:
       ClusterName: !Ref ClusterName
       AddonName: vpc-cni
       ResolveConflicts: OVERWRITE
+      ConfigurationValues: '{"nodeAgent": {"enabled": false}}'
       Tags:
         - Key: Name
           Value: !Sub "${ResourceNamePrefix}-vpc-cni"
