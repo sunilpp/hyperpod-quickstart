@@ -1,6 +1,17 @@
 # AWS SageMaker HyperPod Quick Start
 
-Deploy a fully configured SageMaker HyperPod cluster in under 30 minutes. One command to deploy, one command to connect, one command to test.
+Deploy a fully configured SageMaker HyperPod cluster in under 30 minutes. One click to deploy, one command to connect, one command to test.
+
+## One-Click Deploy
+
+| | **NVIDIA GPU** (p5, p4d, g5) | **AWS Trainium** (trn1, trn2) |
+|:---:|:---:|:---:|
+| **Slurm** | [![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://us-west-2.console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/create/review?templateURL=https%3A%2F%2Fs3.amazonaws.com%2Fhyperpodstackfiles%2Fhyperpod-quickstart%2Fslurm-gpu%2Ftemplate.yaml&stackName=my-hyperpod&param_LifecycleScriptSourceBucket=hyperpodstackfiles&param_LifecycleScriptSourcePrefix=hyperpod-quickstart/slurm-gpu/lifecycle-scripts) | [![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://us-west-2.console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/create/review?templateURL=https%3A%2F%2Fs3.amazonaws.com%2Fhyperpodstackfiles%2Fhyperpod-quickstart%2Fslurm-trainium%2Ftemplate.yaml&stackName=my-hyperpod-trn&param_LifecycleScriptSourceBucket=hyperpodstackfiles&param_LifecycleScriptSourcePrefix=hyperpod-quickstart/slurm-trainium/lifecycle-scripts) |
+| **Amazon EKS** | [![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://us-west-2.console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/create/review?templateURL=https%3A%2F%2Fs3.amazonaws.com%2Fhyperpodstackfiles%2Fhyperpod-quickstart%2Feks-gpu%2Ftemplate.yaml&stackName=my-hyperpod-eks&param_LifecycleScriptSourceBucket=hyperpodstackfiles&param_LifecycleScriptSourcePrefix=hyperpod-quickstart/eks-gpu/lifecycle-scripts) | [![Launch Stack](https://s3.amazonaws.com/cloudformation-examples/cloudformation-launch-stack.png)](https://us-west-2.console.aws.amazon.com/cloudformation/home?region=us-west-2#/stacks/create/review?templateURL=https%3A%2F%2Fs3.amazonaws.com%2Fhyperpodstackfiles%2Fhyperpod-quickstart%2Feks-trainium%2Ftemplate.yaml&stackName=my-hyperpod-eks-trn&param_LifecycleScriptSourceBucket=hyperpodstackfiles&param_LifecycleScriptSourcePrefix=hyperpod-quickstart/eks-trainium/lifecycle-scripts) |
+
+> Click any button above to open CloudFormation with all parameters pre-filled. Review settings and click **Create stack**.
+>
+> **Using a different S3 bucket or region?** Run `./scripts/publish.sh YOUR_BUCKET us-west-2` to generate buttons for your setup.
 
 ## Prerequisites
 
