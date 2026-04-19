@@ -144,6 +144,22 @@ Resources:
                   - eks:ListClusters
                 Resource: !Sub "arn:${AWS::Partition}:eks:${AWS::Region}:${AWS::AccountId}:cluster/*"
 
+        # ECR access (needed for EKS nodes to pull container images)
+        - PolicyName: !Sub "${ResourceNamePrefix}-ecr"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: "*"
+
         # Prometheus remote write (conditional)
         - !If
           - HasPrometheusWorkspace
