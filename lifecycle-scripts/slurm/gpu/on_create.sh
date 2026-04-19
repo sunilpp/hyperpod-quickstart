@@ -603,11 +603,11 @@ echo 'Setup complete on \$(hostname)'
 "
 
 # Train across all nodes
-srun -N \$NODES --gpus-per-node=\$GPUS --exclusive --export=\$EXPORT_ARGS bash -c '
-MASTER_ADDR=\$(scontrol show hostname \$SLURM_NODELIST | head -1)
+srun -N \$NODES --gpus-per-node=\$GPUS --exclusive --export=\$EXPORT_ARGS bash -c "
+MASTER_ADDR=\\\$(scontrol show hostname \\\$SLURM_NODELIST | head -1)
 cd /tmp/nanoGPT
-torchrun --nproc_per_node=$GPUS --nnodes='"\$NODES"' --node_rank=\$SLURM_NODEID --master_addr=\$MASTER_ADDR --master_port=$MASTER_PORT train.py --dataset=shakespeare_char --n_layer=4 --n_head=4 --n_embd=128 --batch_size=8 --block_size=64 --max_iters=200 --eval_interval=50 --device=cuda --compile=False '\$BACKEND_ARG'
-'
+torchrun --nproc_per_node=\$GPUS --nnodes=\$NODES --node_rank=\\\$SLURM_NODEID --master_addr=\\\$MASTER_ADDR --master_port=$MASTER_PORT train.py --dataset=shakespeare_char --n_layer=4 --n_head=4 --n_embd=128 --batch_size=8 --block_size=64 --max_iters=200 --eval_interval=50 --device=cuda --compile=False \$BACKEND_ARG
+"
 NANOGPT_SCRIPT
     chmod +x /opt/slurm/bin/run-nanogpt
     log "NanoGPT test ready: run-nanogpt [nodes] [gpus-per-node]"

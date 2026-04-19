@@ -98,18 +98,6 @@ Resources:
       RouteTableId: !Ref EKSRouteTable
 
   # -------------------------------------------------------------------------
-  # S3 Gateway Endpoint for EKS subnets (separate from networking stack)
-  # -------------------------------------------------------------------------
-  EKSS3GatewayEndpoint:
-    Type: AWS::EC2::VPCEndpoint
-    Properties:
-      VpcId: !Ref VpcId
-      ServiceName: !Sub "com.amazonaws.${AWS::Region}.s3"
-      VpcEndpointType: Gateway
-      RouteTableIds:
-        - !Ref EKSRouteTable
-
-  # -------------------------------------------------------------------------
   # EKS Cluster IAM Role
   # -------------------------------------------------------------------------
   EKSClusterRole:
