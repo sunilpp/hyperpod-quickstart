@@ -104,9 +104,16 @@ Resources:
                   - ec2:DeleteNetworkInterface
                   - ec2:DeleteNetworkInterfacePermission
                   - ec2:ModifyNetworkInterfaceAttribute
+                  - ec2:AssignPrivateIpAddresses
+                  - ec2:UnassignPrivateIpAddresses
+                  - ec2:AttachNetworkInterface
+                  - ec2:DetachNetworkInterface
+                  - ec2:CreateTags
+                  - ec2:DescribeTags
                   - ec2:DescribeSubnets
                   - ec2:DescribeSecurityGroups
                   - ec2:DescribeVpcs
+                  - ec2:DescribeInstanceTypes
                 Resource: "*"
 
         # SSM for cluster configuration parameters
