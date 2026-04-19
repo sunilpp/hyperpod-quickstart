@@ -92,31 +92,35 @@ Resources:
                   - logs:DescribeLogStreams
                 Resource: !Sub "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/sagemaker/*"
 
-        # EC2 describe for network and instance discovery
-        - PolicyName: !Sub "${ResourceNamePrefix}-ec2-describe"
+        # EC2 + VPC CNI permissions (per AWS HyperPod EKS IAM docs)
+        - PolicyName: !Sub "${ResourceNamePrefix}-ec2-networking"
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
                 Action:
-                  - ec2:DescribeInstances
-                  - ec2:DescribeNetworkInterfaces
+                  - ec2:AssignPrivateIpAddresses
+                  - ec2:AttachNetworkInterface
                   - ec2:CreateNetworkInterface
                   - ec2:CreateNetworkInterfacePermission
                   - ec2:DeleteNetworkInterface
                   - ec2:DeleteNetworkInterfacePermission
-                  - ec2:ModifyNetworkInterfaceAttribute
-                  - ec2:AssignPrivateIpAddresses
-                  - ec2:UnassignPrivateIpAddresses
-                  - ec2:AttachNetworkInterface
-                  - ec2:DetachNetworkInterface
-                  - ec2:CreateTags
+                  - ec2:DescribeInstances
+                  - ec2:DescribeInstanceTypes
+                  - ec2:DescribeNetworkInterfaces
                   - ec2:DescribeTags
+                  - ec2:DescribeVpcs
+                  - ec2:DescribeDhcpOptions
                   - ec2:DescribeSubnets
                   - ec2:DescribeSecurityGroups
-                  - ec2:DescribeVpcs
-                  - ec2:DescribeInstanceTypes
+                  - ec2:DetachNetworkInterface
+                  - ec2:ModifyNetworkInterfaceAttribute
+                  - ec2:UnassignPrivateIpAddresses
                 Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ec2:CreateTags
+                Resource: !Sub "arn:${AWS::Partition}:ec2:*:*:network-interface/*"
 
         # SSM for cluster configuration parameters
         - PolicyName: !Sub "${ResourceNamePrefix}-ssm"
