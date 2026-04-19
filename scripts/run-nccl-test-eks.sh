@@ -69,7 +69,11 @@ echo "$MANIFEST" | kubectl apply -f -
 # ── Wait for launcher pod ─────────────────────────────────────────
 echo "Waiting for launcher pod..."
 for i in $(seq 1 120); do
-    LAUNCHER=$(kubectl get pods -l training.kubeflow.org/job-name=nccl-tests,training.kubeflow.org/replica-type=launcher -o name 2>/dev/null | head -1)
+    # Try multiple label selectors (varies by MPI operator version)
+    LAUNCHER=$(kubectl get pods -l training.kubeflow.org/job-name=nccl-tests -o name 2>/dev/null | grep launcher | head -1)
+    if [[ -z "$LAUNCHER" ]]; then
+        LAUNCHER=$(kubectl get pods 2>/dev/null | grep nccl-tests-launcher | awk '{print "pod/"$1}' | head -1)
+    fi
     if [[ -n "$LAUNCHER" ]]; then
         PHASE=$(kubectl get "$LAUNCHER" -o jsonpath='{.status.phase}' 2>/dev/null)
         if [[ "$PHASE" == "Running" || "$PHASE" == "Succeeded" || "$PHASE" == "Failed" ]]; then
@@ -81,7 +85,7 @@ done
 
 if [[ -z "$LAUNCHER" ]]; then
     echo "ERROR: Launcher pod not found after 10 minutes"
-    kubectl get pods -l training.kubeflow.org/job-name=nccl-tests
+    kubectl get pods | grep nccl
     exit 1
 fi
 
