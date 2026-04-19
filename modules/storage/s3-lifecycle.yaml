@@ -149,9 +149,20 @@ Resources:
                                        {"CopiedFiles": str(copied)})
 
                   elif event["RequestType"] == "Delete":
-                      resp = s3.list_objects_v2(Bucket=dst_bucket, Prefix=dst_prefix)
-                      for obj in resp.get("Contents", []):
-                          s3.delete_object(Bucket=dst_bucket, Key=obj["Key"])
+                      # Empty the entire bucket (including versioned objects)
+                      # so CloudFormation can delete the bucket resource
+                      bucket = dst_bucket
+                      logger.info(f"Emptying bucket {bucket}")
+                      paginator = s3.get_paginator("list_object_versions")
+                      for page in paginator.paginate(Bucket=bucket):
+                          objects = []
+                          for v in page.get("Versions", []):
+                              objects.append({"Key": v["Key"], "VersionId": v["VersionId"]})
+                          for d in page.get("DeleteMarkers", []):
+                              objects.append({"Key": d["Key"], "VersionId": d["VersionId"]})
+                          if objects:
+                              s3.delete_objects(Bucket=bucket, Delete={"Objects": objects})
+                              logger.info(f"Deleted {len(objects)} objects/versions")
                       cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
 
               except Exception as e:
