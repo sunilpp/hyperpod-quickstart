@@ -2,11 +2,10 @@
 # Requires: Kubeflow PyTorch Training Operator
 #
 # Usage: kubectl apply -f pytorchjob.yaml
-# Check status: kubectl get pytorchjobs
-# View logs: kubectl logs pytorch-ddp-test-worker-0
+# Check: kubectl get pytorchjobs
+# Logs:  kubectl logs pytorch-ddp-test-master-0
 #
 # Works on both EFA (p5) and non-EFA (g5) instances.
-# Adjust nvidia.com/gpu to match your instance (1 for g5, 8 for p5).
 
 apiVersion: kubeflow.org/v1
 kind: PyTorchJob
@@ -15,8 +14,8 @@ metadata:
   namespace: default
 spec:
   pytorchReplicaSpecs:
-    Worker:
-      replicas: 2
+    Master:
+      replicas: 1
       restartPolicy: OnFailure
       template:
         spec:
@@ -31,43 +30,63 @@ spec:
                   import torch.distributed as dist
                   import os
 
-                  # Auto-detect backend: gloo for non-EFA, nccl for EFA
-                  backend = 'gloo'
-                  try:
-                      import subprocess
-                      result = subprocess.run(['fi_info', '-p', 'efa'], capture_output=True, text=True)
-                      if 'FI_EP_RDM' in result.stdout:
-                          backend = 'nccl'
-                  except:
-                      pass
-
-                  print(f'Using backend: {backend}')
-                  dist.init_process_group(backend=backend)
+                  dist.init_process_group(backend='gloo')
                   rank = dist.get_rank()
                   world_size = dist.get_world_size()
-                  local_rank = int(os.environ.get('LOCAL_RANK', 0))
 
-                  torch.cuda.set_device(local_rank)
-                  device = torch.device(f'cuda:{local_rank}')
+                  torch.cuda.set_device(0)
+                  device = torch.device('cuda:0')
 
-                  # All-reduce test
                   tensor = torch.ones(1024, 1024, device=device) * rank
                   dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
 
                   expected = world_size * (world_size - 1) / 2
+                  actual = tensor[0][0].item()
+                  print(f'Rank {rank}/{world_size}: Result={actual}, Expected={expected}')
                   if rank == 0:
-                      actual = tensor[0][0].item()
-                      print(f'World size: {world_size}')
-                      print(f'Backend: {backend}')
-                      print(f'Result: {actual}, Expected: {expected}')
                       print('SUCCESS' if abs(actual - expected) < 0.01 else 'FAILURE')
 
                   dist.destroy_process_group()
               resources:
                 limits:
-                  nvidia.com/gpu: 1    # 1 for g5, 8 for p5
+                  nvidia.com/gpu: 1
               env:
-                - name: NCCL_DEBUG
-                  value: INFO
+                - name: NCCL_NET_PLUGIN
+                  value: none
+    Worker:
+      replicas: 1
+      restartPolicy: OnFailure
+      template:
+        spec:
+          containers:
+            - name: pytorch
+              image: 763104351884.dkr.ecr.us-west-2.amazonaws.com/pytorch-training:2.1.0-gpu-py310-cu121-ubuntu20.04-sagemaker
+              command:
+                - python3
+                - -c
+                - |
+                  import torch
+                  import torch.distributed as dist
+                  import os
+
+                  dist.init_process_group(backend='gloo')
+                  rank = dist.get_rank()
+                  world_size = dist.get_world_size()
+
+                  torch.cuda.set_device(0)
+                  device = torch.device('cuda:0')
+
+                  tensor = torch.ones(1024, 1024, device=device) * rank
+                  dist.all_reduce(tensor, op=dist.ReduceOp.SUM)
+
+                  expected = world_size * (world_size - 1) / 2
+                  actual = tensor[0][0].item()
+                  print(f'Rank {rank}/{world_size}: Result={actual}, Expected={expected}')
+
+                  dist.destroy_process_group()
+              resources:
+                limits:
+                  nvidia.com/gpu: 1
+              env:
                 - name: NCCL_NET_PLUGIN
                   value: none
