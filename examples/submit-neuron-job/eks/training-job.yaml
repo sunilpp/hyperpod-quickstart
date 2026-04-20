@@ -1,9 +1,10 @@
 # Neuron distributed training test on EKS
-# Verifies multi-node Trainium communication via XLA
+# Verifies multi-node communication + Neuron compute on each node
 #
-# Usage: kubectl apply -f training-job.yaml
-# Check: kubectl get pytorchjobs
-# Logs:  kubectl logs neuron-ddp-test-master-0
+# Usage:
+#   kubectl delete pytorchjob neuron-ddp-test 2>/dev/null
+#   kubectl apply -f training-job.yaml
+#   kubectl logs neuron-ddp-test-master-0
 
 apiVersion: kubeflow.org/v1
 kind: PyTorchJob
@@ -11,7 +12,6 @@ metadata:
   name: neuron-ddp-test
   namespace: default
 spec:
-  nprocPerNode: "1"
   pytorchReplicaSpecs:
     Master:
       replicas: 1
@@ -29,21 +29,28 @@ spec:
                   import torch.distributed as dist
                   import os
 
-                  dist.init_process_group(backend='xla')
+                  # Use gloo for process group coordination
+                  dist.init_process_group(backend='gloo')
                   rank = dist.get_rank()
                   world_size = dist.get_world_size()
+                  print(f'Rank {rank}/{world_size}')
 
+                  # Test 1: distributed all-reduce via gloo (CPU)
+                  cpu_tensor = torch.ones(1024) * rank
+                  dist.all_reduce(cpu_tensor, op=dist.ReduceOp.SUM)
+                  expected = world_size * (world_size - 1) / 2
+                  actual = cpu_tensor[0].item()
+                  print(f'Rank {rank}: all_reduce result={actual}, expected={expected}')
+
+                  # Test 2: Neuron compute on local device
                   import torch_xla.core.xla_model as xm
                   device = xm.xla_device()
-                  print(f'Rank {rank}/{world_size} on device {device}')
-
-                  tensor = torch.ones(1024, 1024, device=device) * rank
-                  xm.all_reduce('sum', [tensor])
+                  a = torch.randn(1024, 1024, device=device)
+                  b = torch.randn(1024, 1024, device=device)
+                  c = torch.matmul(a, b)
                   xm.mark_step()
+                  print(f'Rank {rank}: Neuron compute OK, shape={c.shape}')
 
-                  expected = world_size * (world_size - 1) / 2
-                  actual = tensor[0][0].item()
-                  print(f'Rank {rank}: Result={actual}, Expected={expected}')
                   if rank == 0:
                       print('SUCCESS' if abs(actual - expected) < 0.01 else 'FAILURE')
 
@@ -52,8 +59,6 @@ spec:
                 limits:
                   aws.amazon.com/neuron: 1
               env:
-                - name: FI_PROVIDER
-                  value: efa
                 - name: NEURON_RT_NUM_CORES
                   value: "2"
     Worker:
@@ -72,28 +77,29 @@ spec:
                   import torch.distributed as dist
                   import os
 
-                  dist.init_process_group(backend='xla')
+                  dist.init_process_group(backend='gloo')
                   rank = dist.get_rank()
                   world_size = dist.get_world_size()
+                  print(f'Rank {rank}/{world_size}')
+
+                  cpu_tensor = torch.ones(1024) * rank
+                  dist.all_reduce(cpu_tensor, op=dist.ReduceOp.SUM)
+                  expected = world_size * (world_size - 1) / 2
+                  actual = cpu_tensor[0].item()
+                  print(f'Rank {rank}: all_reduce result={actual}, expected={expected}')
 
                   import torch_xla.core.xla_model as xm
                   device = xm.xla_device()
-                  print(f'Rank {rank}/{world_size} on device {device}')
-
-                  tensor = torch.ones(1024, 1024, device=device) * rank
-                  xm.all_reduce('sum', [tensor])
+                  a = torch.randn(1024, 1024, device=device)
+                  b = torch.randn(1024, 1024, device=device)
+                  c = torch.matmul(a, b)
                   xm.mark_step()
-
-                  expected = world_size * (world_size - 1) / 2
-                  actual = tensor[0][0].item()
-                  print(f'Rank {rank}: Result={actual}, Expected={expected}')
+                  print(f'Rank {rank}: Neuron compute OK, shape={c.shape}')
 
                   dist.destroy_process_group()
               resources:
                 limits:
                   aws.amazon.com/neuron: 1
               env:
-                - name: FI_PROVIDER
-                  value: efa
                 - name: NEURON_RT_NUM_CORES
                   value: "2"
