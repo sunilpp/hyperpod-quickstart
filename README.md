@@ -147,9 +147,29 @@ Iteration time: ~143ms
 
 Loss decreases monotonically. Both nodes train in sync with gradient synchronization across the network. Checkpoints saved at iterations 50, 100, 150, 200.
 
+### NCCOM all-reduce: 2x ml.trn1.32xlarge (EFA)
+
+```
+      size(B)    count(elems)    type    time:avg(us)    algbw(GB/s)    busbw(GB/s)
+      1048576          524288    bf16          145.12           7.23          14.00
+     16777216         8388608    bf16          954.06          17.59          34.07
+    134217728        67108864    bf16         7025.52          19.10          37.01
+# Avg bus bandwidth: 13.29 GB/s
+```
+
+Peak: **37.01 GB/s** at 128MB. 32 Neuron devices per node, EFA transport, bf16 datatype. Both nodes confirmed via `scontrol show job`.
+
+### EKS NCCL all-reduce: 2x ml.g5.16xlarge (TCP, containerized)
+
+Peak: **1.49 GB/s**. Lower than Slurm (3.02 GB/s) due to container networking overhead via VPC CNI.
+
+### EKS PyTorch DDP: 2x ml.g5.16xlarge
+
+`Rank 0/2: Result=1.0, Expected=1.0 — SUCCESS`
+
 ### p5.48xlarge benchmarks
 
-*Placeholder — run `run-nccl-test 2 8` on a p5 cluster and capture results here. Expected: ~400 GB/s busbw on 128MB+ messages, ~230 GB/s algbw on 2GB messages.*
+*Placeholder — run `run-nccl-test 2 8` on a p5 cluster and capture results here. Expected: ~400 GB/s busbw on 128MB+ messages.*
 
 ---
 
@@ -176,6 +196,18 @@ HyperPod's Slurm uses configless mode with DNS SRV records for controller discov
 ### IMDSv2 on HyperPod nodes
 
 HyperPod enforces IMDSv2 (token-based instance metadata). Lifecycle scripts that use `curl http://169.254.169.254/...` without first obtaining a token get empty responses. This silently breaks node type detection, causing controllers to be identified as workers. **Mitigation:** `get_metadata()` helper tries IMDSv2 with token first, falls back to IMDSv1.
+
+### EFA health check failure on Trainium/p4d/p5 instances
+
+Security group egress rule with `0.0.0.0/0` as the only destination causes EFA health checks to fail during cluster creation. HyperPod reports "EFA health checks did not run successfully." **Mitigation:** the security group template now includes a self-referencing egress rule alongside the internet egress rule.
+
+### Neuron tools not in PATH on HyperPod nodes
+
+`neuron-ls`, `nccom-test`, and other Neuron tools are at `/opt/aws/neuron/bin/` but not in the default PATH. Running `neuron-ls` on the controller fails because the controller is an m5 (no Neuron). **Mitigation:** lifecycle script adds the path; use `srun -N 1 bash -c "/opt/aws/neuron/bin/neuron-ls"` to run on workers.
+
+### nccom-test requires OMPI_ALLOW_RUN_AS_ROOT
+
+`nccom-test` uses OpenMPI internally and refuses to run as root (default on HyperPod SSM sessions). **Mitigation:** `run-nccom-test` sets `OMPI_ALLOW_RUN_AS_ROOT=1` automatically.
 
 ### Stack deletion blocked by non-empty S3 bucket
 
@@ -247,7 +279,8 @@ Requirements: AWS account with [HyperPod access](https://docs.aws.amazon.com/sag
 | `check-quotas.sh <instance> <count> [region]` | Verify 9 AWS service quotas |
 | `stack-errors.sh <stack> [region]` | Drill into nested CloudFormation errors |
 | `remote-nccl-test.sh <cluster> [region]` | SSM into Slurm controller (correct target format) |
-| `run-nccl-test [nodes] [gpus]` | NCCL all-reduce benchmark (pre-installed on controller) |
+| `run-nccl-test [nodes] [gpus]` | NCCL all-reduce benchmark — GPU (pre-installed on controller) |
+| `run-nccom-test [nodes] [workers]` | NCCOM all-reduce benchmark — Trainium (pre-installed on controller) |
 | `run-nanogpt [nodes] [gpus]` | Multi-node nanoGPT training test (pre-installed) |
 | `run-nccl-test-eks.sh <cluster> [nodes] [gpus] [region]` | EKS NCCL benchmark via MPIJob |
 

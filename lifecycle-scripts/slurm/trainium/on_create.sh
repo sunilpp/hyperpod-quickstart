@@ -449,6 +449,53 @@ else
     fi
 fi
 
+# -------------------------------------------------------------------------
+# Install NCCOM test script on controller
+# -------------------------------------------------------------------------
+if [[ "$NODE_TYPE" == "controller" ]]; then
+    log "--- Installing NCCOM test ---"
+
+    cat > /opt/slurm/bin/run-nccom-test << 'NCCOM_SCRIPT'
+#!/bin/bash
+NODES=${1:-2}
+WORKERS=${2:-32}
+TOTAL=$((NODES * WORKERS))
+
+echo "============================================================"
+echo "  NCCOM All-Reduce Benchmark (Trainium)"
+echo "  Nodes: $NODES | Workers/node: $WORKERS | Total: $TOTAL"
+echo "============================================================"
+
+export PATH=/opt/aws/neuron/bin:/opt/amazon/openmpi/bin:$PATH
+export FI_PROVIDER=efa
+export OMPI_ALLOW_RUN_AS_ROOT=1
+export OMPI_ALLOW_RUN_AS_ROOT_CONFIRM=1
+
+nccom-test -S \
+    --nworkers $TOTAL \
+    --nnodes $NODES \
+    --minbytes 1KB \
+    --maxbytes 128MB \
+    --stepfactor 2 \
+    --iters 5 \
+    --warmup_iters 5 \
+    --datatype bf16 \
+    all_reduce
+NCCOM_SCRIPT
+    chmod +x /opt/slurm/bin/run-nccom-test
+    ln -sf /opt/slurm/bin/run-nccom-test /usr/local/bin/run-nccom-test
+    log "NCCOM test ready: run-nccom-test [nodes] [workers-per-node]"
+fi
+
+# -------------------------------------------------------------------------
+# Set PATH for all sessions
+# -------------------------------------------------------------------------
+cat > /etc/profile.d/hyperpod-neuron.sh << 'PROFILE'
+export PATH=/opt/aws/neuron/bin:/opt/slurm/bin:/opt/amazon/openmpi/bin:$PATH
+export LD_LIBRARY_PATH=/opt/aws/neuron/lib:/opt/amazon/openmpi/lib:/opt/amazon/efa/lib:${LD_LIBRARY_PATH:-}
+PROFILE
+chmod 644 /etc/profile.d/hyperpod-neuron.sh
+
 log "=========================================="
 log "HyperPod Lifecycle Script Complete"
 log "Node type: $NODE_TYPE"
