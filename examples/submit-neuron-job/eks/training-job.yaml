@@ -1,0 +1,99 @@
+# Neuron distributed training test on EKS
+# Verifies multi-node Trainium communication via XLA
+#
+# Usage: kubectl apply -f training-job.yaml
+# Check: kubectl get pytorchjobs
+# Logs:  kubectl logs neuron-ddp-test-master-0
+
+apiVersion: kubeflow.org/v1
+kind: PyTorchJob
+metadata:
+  name: neuron-ddp-test
+  namespace: default
+spec:
+  nprocPerNode: "1"
+  pytorchReplicaSpecs:
+    Master:
+      replicas: 1
+      restartPolicy: OnFailure
+      template:
+        spec:
+          containers:
+            - name: pytorch
+              image: 763104351884.dkr.ecr.us-west-2.amazonaws.com/pytorch-training-neuronx:2.1.2-neuronx-py310-sdk2.20.2-ubuntu20.04
+              command:
+                - python3
+                - -c
+                - |
+                  import torch
+                  import torch.distributed as dist
+                  import os
+
+                  dist.init_process_group(backend='xla')
+                  rank = dist.get_rank()
+                  world_size = dist.get_world_size()
+
+                  import torch_xla.core.xla_model as xm
+                  device = xm.xla_device()
+                  print(f'Rank {rank}/{world_size} on device {device}')
+
+                  tensor = torch.ones(1024, 1024, device=device) * rank
+                  xm.all_reduce('sum', [tensor])
+                  xm.mark_step()
+
+                  expected = world_size * (world_size - 1) / 2
+                  actual = tensor[0][0].item()
+                  print(f'Rank {rank}: Result={actual}, Expected={expected}')
+                  if rank == 0:
+                      print('SUCCESS' if abs(actual - expected) < 0.01 else 'FAILURE')
+
+                  dist.destroy_process_group()
+              resources:
+                limits:
+                  aws.amazon.com/neuron: 1
+              env:
+                - name: FI_PROVIDER
+                  value: efa
+                - name: NEURON_RT_NUM_CORES
+                  value: "2"
+    Worker:
+      replicas: 1
+      restartPolicy: OnFailure
+      template:
+        spec:
+          containers:
+            - name: pytorch
+              image: 763104351884.dkr.ecr.us-west-2.amazonaws.com/pytorch-training-neuronx:2.1.2-neuronx-py310-sdk2.20.2-ubuntu20.04
+              command:
+                - python3
+                - -c
+                - |
+                  import torch
+                  import torch.distributed as dist
+                  import os
+
+                  dist.init_process_group(backend='xla')
+                  rank = dist.get_rank()
+                  world_size = dist.get_world_size()
+
+                  import torch_xla.core.xla_model as xm
+                  device = xm.xla_device()
+                  print(f'Rank {rank}/{world_size} on device {device}')
+
+                  tensor = torch.ones(1024, 1024, device=device) * rank
+                  xm.all_reduce('sum', [tensor])
+                  xm.mark_step()
+
+                  expected = world_size * (world_size - 1) / 2
+                  actual = tensor[0][0].item()
+                  print(f'Rank {rank}: Result={actual}, Expected={expected}')
+
+                  dist.destroy_process_group()
+              resources:
+                limits:
+                  aws.amazon.com/neuron: 1
+              env:
+                - name: FI_PROVIDER
+                  value: efa
+                - name: NEURON_RT_NUM_CORES
+                  value: "2"
