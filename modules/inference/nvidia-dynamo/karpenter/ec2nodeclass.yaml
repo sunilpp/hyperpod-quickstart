@@ -1,0 +1,46 @@
+---
+# EC2NodeClass for NVIDIA Dynamo inference GPU nodes.
+# Configures the AMI, security groups, subnets, and block devices
+# for Karpenter-provisioned G6e instances.
+apiVersion: karpenter.k8s.aws/v1
+kind: EC2NodeClass
+metadata:
+  name: dynamo-inference
+spec:
+  # EKS-optimized GPU AMI (AL2023 includes NVIDIA drivers + container toolkit)
+  amiSelectorTerms:
+    - alias: al2023@latest
+  # Use the same security group as the HyperPod/EKS cluster
+  securityGroupSelectorTerms:
+    - id: "${CLUSTER_SG}"
+  # Use private subnets tagged for Karpenter discovery
+  subnetSelectorTerms:
+    - tags:
+        karpenter.sh/discovery: "${CLUSTER_NAME}"
+  # Karpenter node IAM role — discovered from cluster at install time.
+  # install.sh substitutes this; override with --karpenter-role if your
+  # cluster uses a different naming convention.
+  role: "${KARPENTER_NODE_ROLE}"
+
+  # Root volume for OS + container images
+  blockDeviceMappings:
+    - deviceName: /dev/xvda
+      ebs:
+        volumeSize: 200Gi
+        volumeType: gp3
+        iops: 6000
+        throughput: 250
+        deleteOnTermination: true
+    # Additional volume for model weights cache
+    - deviceName: /dev/xvdb
+      ebs:
+        volumeSize: 500Gi
+        volumeType: gp3
+        iops: 10000
+        throughput: 500
+        deleteOnTermination: true
+
+  tags:
+    Name: "dynamo-inference-${CLUSTER_NAME}"
+    ManagedBy: karpenter
+    Purpose: inference

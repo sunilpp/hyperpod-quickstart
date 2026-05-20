@@ -1,0 +1,100 @@
+---
+# DeepSeek-R1-Distill-Llama-8B with disaggregated prefill/decode
+# and KV-aware smart routing on G6e instances.
+#
+# This is the recommended starting example — the 8B model fits on a
+# single L40S GPU (48 GB), and disaggregated serving demonstrates
+# Dynamo's key optimization: separate prefill and decode workers.
+#
+# GPU requirement: 2x L40S minimum (1 prefill + 1 decode)
+# Instance: g6e.12xlarge (4x L40S) gives room for scaling.
+#
+# Usage:
+#   kubectl apply -f deepseek-r1-8b-disagg.yaml
+#   kubectl get pods -n dynamo-cloud -w
+#
+# Test:
+#   kubectl port-forward svc/deepseek-8b-disagg-frontend 8000:8000 -n dynamo-cloud
+#   curl http://localhost:8000/v1/chat/completions \
+#     -H "Content-Type: application/json" \
+#     -d '{"model":"deepseek-ai/DeepSeek-R1-Distill-Llama-8B","messages":[{"role":"user","content":"Hello"}],"max_tokens":100}'
+apiVersion: nvidia.com/v1beta1
+kind: DynamoGraphDeploymentRequest
+metadata:
+  name: deepseek-8b-disagg
+  namespace: dynamo-cloud
+  labels:
+    app: dynamo-inference
+    model: deepseek-r1-8b
+    mode: disaggregated
+spec:
+  model: deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+  backend: vllm
+  sla:
+    ttft: 200.0    # Time to first token (ms)
+    itl: 20.0      # Inter-token latency (ms)
+  autoApply: true
+
+  # Disaggregated serving configuration
+  graph:
+    frontend:
+      replicas: 1
+      resources:
+        requests:
+          cpu: "2"
+          memory: 4Gi
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: "inference"
+          effect: NoSchedule
+
+    router:
+      replicas: 1
+      # Enable KV-aware routing for prefix cache reuse
+      kvAwareRouting: true
+      resources:
+        requests:
+          cpu: "2"
+          memory: 4Gi
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: "inference"
+          effect: NoSchedule
+
+    prefill:
+      replicas: 1
+      tensorParallelism: 1
+      resources:
+        requests:
+          cpu: "4"
+          memory: 16Gi
+          nvidia.com/gpu: "1"
+        limits:
+          nvidia.com/gpu: "1"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: "inference"
+          effect: NoSchedule
+      nodeSelector:
+        workload-type: inference
+
+    decode:
+      replicas: 1
+      tensorParallelism: 1
+      resources:
+        requests:
+          cpu: "4"
+          memory: 16Gi
+          nvidia.com/gpu: "1"
+        limits:
+          nvidia.com/gpu: "1"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: "inference"
+          effect: NoSchedule
+      nodeSelector:
+        workload-type: inference

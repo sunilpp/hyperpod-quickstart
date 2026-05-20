@@ -1,0 +1,32 @@
+# NATS Helm values for NVIDIA Dynamo
+# NATS with JetStream is required for KV-aware routing coordination
+# across GPUs in disaggregated serving mode.
+
+config:
+  jetstream:
+    enabled: true
+    memStorage:
+      size: 2Gi
+    fileStorage:
+      size: 10Gi
+      storageDirectory: /data/jetstream
+
+  cluster:
+    enabled: false
+
+# Resource limits for the NATS container
+container:
+  merge:
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+
+reloader:
+  enabled: true
+
+natsBox:
+  enabled: true

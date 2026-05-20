@@ -1,0 +1,59 @@
+---
+# DeepSeek-R1-Distill-Llama-8B in aggregated mode (simple, single-GPU)
+#
+# This is the simplest deployment — no disaggregation, no smart routing.
+# Good for getting started and validating the Dynamo stack is working.
+#
+# GPU requirement: 1x L40S (48 GB)
+# Instance: Any g6e size
+#
+# Usage:
+#   kubectl apply -f deepseek-r1-8b-aggregated.yaml
+#   kubectl get pods -n dynamo-cloud -w
+apiVersion: nvidia.com/v1beta1
+kind: DynamoGraphDeploymentRequest
+metadata:
+  name: deepseek-8b-agg
+  namespace: dynamo-cloud
+  labels:
+    app: dynamo-inference
+    model: deepseek-r1-8b
+    mode: aggregated
+spec:
+  model: deepseek-ai/DeepSeek-R1-Distill-Llama-8B
+  backend: vllm
+  sla:
+    ttft: 300.0
+    itl: 30.0
+  autoApply: true
+
+  graph:
+    frontend:
+      replicas: 1
+      resources:
+        requests:
+          cpu: "2"
+          memory: 4Gi
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: "inference"
+          effect: NoSchedule
+
+    worker:
+      replicas: 1
+      tensorParallelism: 1
+      resources:
+        requests:
+          cpu: "4"
+          memory: 16Gi
+          nvidia.com/gpu: "1"
+        limits:
+          nvidia.com/gpu: "1"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: "inference"
+          effect: NoSchedule
+      nodeSelector:
+        workload-type: inference

@@ -1,0 +1,107 @@
+---
+# Llama-3-70B multi-node disaggregated serving
+#
+# The 70B model requires tensor parallelism across multiple GPUs.
+# This example uses 2x g6e.48xlarge (8 L40S each = 16 GPUs total)
+# with disaggregated prefill/decode and KV-aware routing.
+#
+# GPU requirement: 8x L40S minimum (TP=4 for prefill, TP=4 for decode)
+# Instance: 2x g6e.48xlarge recommended
+#
+# Prerequisites:
+#   - HuggingFace token with access to meta-llama/Llama-3-70B
+#     kubectl create secret generic hf-token \
+#       --from-literal=token=$HF_TOKEN -n dynamo-cloud
+#   - Karpenter NodePool max-gpus >= 16
+#
+# Usage:
+#   kubectl apply -f llama3-70b-multinode.yaml
+#   kubectl get pods -n dynamo-cloud -w
+apiVersion: nvidia.com/v1beta1
+kind: DynamoGraphDeploymentRequest
+metadata:
+  name: llama3-70b-disagg
+  namespace: dynamo-cloud
+  labels:
+    app: dynamo-inference
+    model: llama-3-70b
+    mode: disaggregated-multinode
+spec:
+  model: meta-llama/Llama-3-70B
+  backend: vllm
+  sla:
+    ttft: 500.0
+    itl: 30.0
+  autoApply: true
+
+  # HuggingFace token for gated model access
+  env:
+    - name: HF_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: hf-token
+          key: token
+
+  graph:
+    frontend:
+      replicas: 1
+      resources:
+        requests:
+          cpu: "4"
+          memory: 8Gi
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: "inference"
+          effect: NoSchedule
+
+    router:
+      replicas: 1
+      kvAwareRouting: true
+      resources:
+        requests:
+          cpu: "4"
+          memory: 8Gi
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: "inference"
+          effect: NoSchedule
+
+    prefill:
+      replicas: 1
+      # TP=4 across 4 GPUs for prefill (compute-heavy)
+      tensorParallelism: 4
+      resources:
+        requests:
+          cpu: "16"
+          memory: 64Gi
+          nvidia.com/gpu: "4"
+        limits:
+          nvidia.com/gpu: "4"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: "inference"
+          effect: NoSchedule
+      nodeSelector:
+        workload-type: inference
+
+    decode:
+      replicas: 1
+      # TP=4 across 4 GPUs for decode (latency-sensitive)
+      tensorParallelism: 4
+      resources:
+        requests:
+          cpu: "16"
+          memory: 64Gi
+          nvidia.com/gpu: "4"
+        limits:
+          nvidia.com/gpu: "4"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Equal
+          value: "inference"
+          effect: NoSchedule
+      nodeSelector:
+        workload-type: inference

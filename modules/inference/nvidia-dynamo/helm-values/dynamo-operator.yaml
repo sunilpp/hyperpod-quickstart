@@ -1,0 +1,47 @@
+# NVIDIA Dynamo Operator Helm values
+# The operator manages DynamoGraphDeploymentRequest CRDs and
+# orchestrates inference graph lifecycle on Kubernetes.
+#
+# NOTE: The exact field structure depends on the dynamo-operator chart
+# version. If helm install fails with unknown field errors, check:
+#   helm show values nvaie/dynamo-operator --version <version>
+
+# Image pull secret for NGC container registry
+imagePullSecrets:
+  - name: ngc-secret
+
+operator:
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+# API Store connection (PostgreSQL)
+# The secret 'dynamo-postgresql' is auto-created by the bitnami/postgresql chart
+apiStore:
+  host: dynamo-postgresql
+  port: 5432
+  database: dynamo
+  username: dynamo
+  passwordSecretRef:
+    name: dynamo-postgresql
+    key: password
+
+# NATS connection for KV-aware routing
+nats:
+  url: nats://nats:4222
+
+# Object storage for build artifacts
+# The secret 'dynamo-minio' is auto-created by the bitnami/minio chart
+objectStore:
+  endpoint: http://dynamo-minio:9000
+  accessKeySecretRef:
+    name: dynamo-minio
+    key: root-user
+  secretKeyRef:
+    name: dynamo-minio
+    key: root-password
+  bucket: dynamo-artifacts

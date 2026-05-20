@@ -1,0 +1,61 @@
+---
+# Karpenter NodePool for NVIDIA Dynamo inference workloads.
+# Provisions G6e (L40S) instances on demand and scales to zero when idle.
+#
+# Supported instance types:
+#   g6e.12xlarge  — 4x L40S (192 GB), up to 1 EFA interface
+#   g6e.24xlarge  — 4x L40S (192 GB), up to 1 EFA interface
+#   g6e.48xlarge  — 8x L40S (384 GB), up to 4 EFA interfaces
+#
+# To use G6 (L4) or G5 (A10G) instances instead, add them to the
+# instance-type list below or override via install.sh --gpu-instance-type.
+apiVersion: karpenter.sh/v1
+kind: NodePool
+metadata:
+  name: dynamo-inference
+spec:
+  template:
+    metadata:
+      labels:
+        workload-type: inference
+        nvidia.com/dynamo: "true"
+    spec:
+      requirements:
+        # GPU instance families — substituted by install.sh from --gpu-instance-type
+        - key: node.kubernetes.io/instance-type
+          operator: In
+          values:
+${INSTANCE_TYPES}
+        # Single AZ for EFA (required for disaggregated serving)
+        - key: karpenter.sh/capacity-type
+          operator: In
+          values:
+            - "on-demand"
+        - key: kubernetes.io/arch
+          operator: In
+          values:
+            - "amd64"
+      # Taint so only inference pods with matching tolerations land here
+      taints:
+        - key: nvidia.com/gpu
+          value: "inference"
+          effect: NoSchedule
+      nodeClassRef:
+        group: karpenter.k8s.aws
+        kind: EC2NodeClass
+        name: dynamo-inference
+      # Remove nodes that have been idle for 30 seconds (aggressive scale-down)
+      expireAfter: 720h  # Force rotation every 30 days
+
+  # Hard limit on total GPUs to control cost
+  limits:
+    nvidia.com/gpu: "${MAX_GPUS}"
+
+  # Scale down aggressively when inference load drops
+  disruption:
+    consolidationPolicy: WhenEmptyOrUnderutilized
+    consolidateAfter: 60s
+
+  # Weight determines priority when multiple NodePools match;
+  # lower weight = lower priority (training pools should be higher)
+  weight: 10
