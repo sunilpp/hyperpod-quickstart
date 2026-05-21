@@ -162,6 +162,7 @@ Resources:
       Parameters:
         ResourceNamePrefix: !Ref ClusterName
         ClusterName: !GetAtt EKSStack.Outputs.ClusterName
+        OIDCIssuerUrl: !GetAtt EKSStack.Outputs.OIDCIssuer
 
   # =========================================================================
   # Storage

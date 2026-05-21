@@ -149,6 +149,7 @@ Resources:
       Parameters:
         ResourceNamePrefix: !Ref ClusterName
         ClusterName: !GetAtt EKSStack.Outputs.ClusterName
+        OIDCIssuerUrl: !GetAtt EKSStack.Outputs.OIDCIssuer
 
   StorageStack:
     Type: AWS::CloudFormation::Stack

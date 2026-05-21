@@ -2,6 +2,7 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: >
   EKS managed add-ons for HyperPod clusters.
   Installs required networking and storage add-ons.
+  Creates an OIDC provider and IRSA role for the EBS CSI driver.
 
 Parameters:
   ResourceNamePrefix:
@@ -12,7 +13,71 @@ Parameters:
     Type: String
     Description: Name of the EKS cluster.
 
+  OIDCIssuerUrl:
+    Type: String
+    Description: >
+      OIDC issuer URL from the EKS cluster (e.g., https://oidc.eks.us-west-2.amazonaws.com/id/XXXX).
+      Used to create the IAM OIDC provider and IRSA role for EBS CSI.
+
 Resources:
+
+  # -------------------------------------------------------------------------
+  # OIDC Provider (required for IRSA — IAM Roles for Service Accounts)
+  # -------------------------------------------------------------------------
+  OIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: !Ref OIDCIssuerUrl
+      ClientIdList:
+        - sts.amazonaws.com
+      # AWS-managed thumbprint — EKS OIDC uses an AWS-signed certificate
+      # so the thumbprint is not validated, but the field is required.
+      ThumbprintList:
+        - "9e99a48a9960b14926bb7f3b02e22da2b0ab7280"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourceNamePrefix}-oidc-provider"
+
+  # -------------------------------------------------------------------------
+  # EBS CSI Driver IAM Role (IRSA)
+  # The EBS CSI controller pod assumes this role via its service account
+  # to create/attach/delete EBS volumes.
+  # -------------------------------------------------------------------------
+  EbsCsiRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ResourceNamePrefix}-ebs-csi-role"
+      AssumeRolePolicyDocument: !Sub
+        - |
+          {
+            "Version": "2012-10-17",
+            "Statement": [{
+              "Effect": "Allow",
+              "Principal": {
+                "Federated": "${OIDCProviderArn}"
+              },
+              "Action": "sts:AssumeRoleWithWebIdentity",
+              "Condition": {
+                "StringEquals": {
+                  "${OIDCHost}:sub": "system:serviceaccount:kube-system:ebs-csi-controller-sa",
+                  "${OIDCHost}:aud": "sts.amazonaws.com"
+                }
+              }
+            }]
+          }
+        - OIDCProviderArn: !GetAtt OIDCProvider.Arn
+          OIDCHost: !Select [1, !Split ["//", !Ref OIDCIssuerUrl]]
+      ManagedPolicyArns:
+        - !Sub "arn:${AWS::Partition}:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+      Tags:
+        - Key: Name
+          Value: !Sub "${ResourceNamePrefix}-ebs-csi-role"
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # -------------------------------------------------------------------------
+  # EKS Add-ons
+  # -------------------------------------------------------------------------
   VpcCniAddon:
     Type: AWS::EKS::Addon
     Properties:
@@ -46,10 +111,12 @@ Resources:
 
   EbsCsiAddon:
     Type: AWS::EKS::Addon
+    DependsOn: EbsCsiRole
     Properties:
       ClusterName: !Ref ClusterName
       AddonName: aws-ebs-csi-driver
       ResolveConflicts: OVERWRITE
+      ServiceAccountRoleArn: !GetAtt EbsCsiRole.Arn
       Tags:
         - Key: Name
           Value: !Sub "${ResourceNamePrefix}-ebs-csi"
@@ -58,3 +125,11 @@ Outputs:
   AddonsStatus:
     Description: EKS add-ons deployed
     Value: "vpc-cni, coredns, kube-proxy, aws-ebs-csi-driver"
+
+  OIDCProviderArn:
+    Description: ARN of the IAM OIDC provider (for additional IRSA roles)
+    Value: !GetAtt OIDCProvider.Arn
+
+  EbsCsiRoleArn:
+    Description: ARN of the EBS CSI driver IAM role
+    Value: !GetAtt EbsCsiRole.Arn
