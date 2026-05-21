@@ -207,18 +207,6 @@ fi
 # ── Step 4: Add Helm repos ───────────────────────────────────────────
 info "Adding Helm repositories..."
 
-# NGC Helm repo requires authentication
-if [[ -n "${NGC_API_KEY:-}" ]]; then
-  run helm repo add nvaie https://helm.ngc.nvidia.com/nvaie \
-    --username='$oauthtoken' --password="${NGC_API_KEY}" --force-update
-else
-  warn "NGC_API_KEY not set. Cannot add NVIDIA Helm repo."
-  warn "  export NGC_API_KEY=<your-key>  (get one at https://ngc.nvidia.com/)"
-  warn "  Then re-run this script."
-  # Try unauthenticated in case it works
-  run helm repo add nvaie https://helm.ngc.nvidia.com/nvaie --force-update 2>/dev/null || true
-fi
-
 run helm repo add nats https://nats-io.github.io/k8s/helm/charts/ --force-update 2>/dev/null || true
 run helm repo add bitnami https://charts.bitnami.com/bitnami --force-update 2>/dev/null || true
 run helm repo update
@@ -253,10 +241,14 @@ run helm upgrade --install dynamo-minio bitnami/minio \
   -f "${SCRIPT_DIR}/helm-values/minio.yaml" \
   --wait --timeout 10m || warn "MinIO install failed. Check: kubectl get pods -n ${NAMESPACE}"
 
-# ── Step 8: Install NVIDIA Dynamo Operator ────────────────────────────
-info "Installing NVIDIA Dynamo Operator v${DYNAMO_OPERATOR_VERSION}..."
+# ── Step 8: Install NVIDIA Dynamo CRDs + Platform ─────────────────────
+# Dynamo charts are public on NGC under nvidia/ai-dynamo (no API key needed for charts).
+# Container images on nvcr.io may still need NGC_API_KEY for pulling.
+NGC_CHART_BASE="https://helm.ngc.nvidia.com/nvidia/ai-dynamo/charts"
 
-# Create image pull secret if NGC key is available
+info "Installing NVIDIA Dynamo v${DYNAMO_OPERATOR_VERSION}..."
+
+# Create image pull secret if NGC key is available (needed for container images)
 if [[ -n "${NGC_API_KEY:-}" ]]; then
   info "Creating NGC image pull secret..."
   run kubectl create secret docker-registry ngc-secret \
@@ -265,28 +257,49 @@ if [[ -n "${NGC_API_KEY:-}" ]]; then
     --docker-password="${NGC_API_KEY}" \
     -n "$NAMESPACE" \
     --dry-run=client -o yaml | run kubectl apply -f -
+else
+  warn "NGC_API_KEY not set. Container image pulls from nvcr.io may fail."
+  warn "  export NGC_API_KEY=<your-key>  (get one at https://ngc.nvidia.com/)"
 fi
 
-# Verify the repo is available before installing
-if ! helm search repo nvaie/dynamo-operator --version "${DYNAMO_OPERATOR_VERSION}" &>/dev/null; then
-  warn "Dynamo Operator chart not found in nvaie repo."
-  warn "This usually means NGC_API_KEY is missing or invalid."
-  warn "Checking if CRDs are already installed from a previous deployment..."
-  if kubectl get crd dynamographdeploymentrequests.nvidia.com &>/dev/null; then
-    info "Dynamo CRDs already registered — operator was previously installed."
-    info "Skipping operator Helm install."
-  else
-    error "Dynamo Operator chart not found and CRDs not present.
-  Set NGC_API_KEY and re-run:
-    export NGC_API_KEY=<your-key>
-    ./install.sh"
-  fi
+# Step 8a: Install Dynamo CRDs
+if kubectl get crd dynamographdeploymentrequests.nvidia.com &>/dev/null; then
+  info "Dynamo CRDs already registered. Skipping CRD install."
 else
-  run helm upgrade --install dynamo-operator nvaie/dynamo-operator \
+  info "Fetching dynamo-crds chart v${DYNAMO_OPERATOR_VERSION}..."
+  CRDS_TGZ="${SCRIPT_DIR}/dynamo-crds-${DYNAMO_OPERATOR_VERSION}.tgz"
+  if run helm fetch "${NGC_CHART_BASE}/dynamo-crds-${DYNAMO_OPERATOR_VERSION}.tgz" -d "${SCRIPT_DIR}"; then
+    info "Installing Dynamo CRDs..."
+    run helm upgrade --install dynamo-crds "$CRDS_TGZ" --namespace default \
+      || warn "Dynamo CRDs install failed."
+    rm -f "$CRDS_TGZ"
+  else
+    warn "Failed to fetch dynamo-crds chart. CRDs may need manual install."
+    warn "  helm fetch ${NGC_CHART_BASE}/dynamo-crds-${DYNAMO_OPERATOR_VERSION}.tgz"
+  fi
+fi
+
+# Step 8b: Install Dynamo Platform (operator + dependencies)
+info "Fetching dynamo-platform chart v${DYNAMO_OPERATOR_VERSION}..."
+PLATFORM_TGZ="${SCRIPT_DIR}/dynamo-platform-${DYNAMO_OPERATOR_VERSION}.tgz"
+if run helm fetch "${NGC_CHART_BASE}/dynamo-platform-${DYNAMO_OPERATOR_VERSION}.tgz" -d "${SCRIPT_DIR}"; then
+  info "Installing Dynamo Platform..."
+  run helm upgrade --install dynamo-platform "$PLATFORM_TGZ" \
     -n "$NAMESPACE" \
     -f "${SCRIPT_DIR}/helm-values/dynamo-operator.yaml" \
-    --version "${DYNAMO_OPERATOR_VERSION}" \
-    --wait --timeout 10m || warn "Dynamo Operator install did not complete. Check: kubectl get pods -n ${NAMESPACE}"
+    --wait --timeout 10m \
+    || warn "Dynamo Platform install did not complete in time. Check: kubectl get pods -n ${NAMESPACE}"
+  rm -f "$PLATFORM_TGZ"
+else
+  warn "Failed to fetch dynamo-platform chart."
+  warn "Checking if operator is already running..."
+  if kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/name=dynamo-operator --no-headers 2>/dev/null | grep -q Running; then
+    info "Dynamo Operator is already running."
+  else
+    warn "Dynamo Platform not installed. Install manually:"
+    warn "  helm fetch ${NGC_CHART_BASE}/dynamo-platform-${DYNAMO_OPERATOR_VERSION}.tgz"
+    warn "  helm install dynamo-platform dynamo-platform-${DYNAMO_OPERATOR_VERSION}.tgz -n ${NAMESPACE}"
+  fi
 fi
 
 # Restore Docker config if we patched it
