@@ -141,18 +141,82 @@ fi
 
 info "Prerequisites validated."
 
+# ── Step 1b: Fix Docker credential helper if broken ──────────────────
+# On macOS, Docker Desktop sets credsStore in ~/.docker/config.json but
+# the docker-credential-desktop binary may not be in PATH (e.g., when
+# running from a remote host or Docker Desktop isn't installed). This
+# breaks Helm OCI pulls from Bitnami/Docker Hub registries.
+DOCKER_CONFIG="${HOME}/.docker/config.json"
+if [[ -f "$DOCKER_CONFIG" ]] && grep -q '"credsStore"' "$DOCKER_CONFIG" 2>/dev/null; then
+  if ! command -v "docker-credential-$(grep -o '"credsStore"[[:space:]]*:[[:space:]]*"[^"]*"' "$DOCKER_CONFIG" | grep -o '"[^"]*"$' | tr -d '"')" &>/dev/null; then
+    warn "Docker credential helper not found in PATH."
+    warn "Temporarily removing credsStore from ${DOCKER_CONFIG} for Helm OCI pulls."
+    # Back up and patch — remove credsStore line so Helm falls back to anonymous pulls
+    cp "$DOCKER_CONFIG" "${DOCKER_CONFIG}.bak"
+    python3 -c "
+import json, sys
+with open('$DOCKER_CONFIG') as f: c = json.load(f)
+c.pop('credsStore', None)
+with open('$DOCKER_CONFIG', 'w') as f: json.dump(c, f, indent=2)
+" 2>/dev/null || true
+    DOCKER_CONFIG_PATCHED="true"
+  fi
+fi
+
 # ── Step 2: Create namespace ──────────────────────────────────────────
 info "Creating namespace '${NAMESPACE}'..."
 run kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | run kubectl apply -f -
 
-# ── Step 3: Add Helm repos ───────────────────────────────────────────
+# ── Step 3: Verify default StorageClass exists ────────────────────────
+# NATS, PostgreSQL, MinIO all need PVCs. Without a StorageClass, pods stay Pending.
+DEFAULT_SC=$(kubectl get storageclass -o jsonpath='{.items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")].metadata.name}' 2>/dev/null || true)
+if [[ -z "$DEFAULT_SC" ]]; then
+  warn "No default StorageClass found. NATS/PostgreSQL/MinIO PVCs will be Pending."
+  warn "Checking if EBS CSI driver is installed..."
+  if kubectl get csidrivers ebs.csi.aws.com &>/dev/null; then
+    info "EBS CSI driver found. Creating default gp3 StorageClass..."
+    run kubectl apply -f - <<'SCEOF'
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gp3
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+volumeBindingMode: WaitForFirstConsumer
+allowVolumeExpansion: true
+SCEOF
+  else
+    warn "EBS CSI driver not found. Install it first:"
+    warn "  aws eks create-addon --cluster-name ${CLUSTER_NAME} --addon-name aws-ebs-csi-driver --region ${REGION}"
+    warn "Then re-run this script."
+  fi
+else
+  info "Default StorageClass: ${DEFAULT_SC}"
+fi
+
+# ── Step 4: Add Helm repos ───────────────────────────────────────────
 info "Adding Helm repositories..."
-run helm repo add nvaie https://helm.ngc.nvidia.com/nvaie --force-update 2>/dev/null || true
+
+# NGC Helm repo requires authentication
+if [[ -n "${NGC_API_KEY:-}" ]]; then
+  run helm repo add nvaie https://helm.ngc.nvidia.com/nvaie \
+    --username='$oauthtoken' --password="${NGC_API_KEY}" --force-update
+else
+  warn "NGC_API_KEY not set. Cannot add NVIDIA Helm repo."
+  warn "  export NGC_API_KEY=<your-key>  (get one at https://ngc.nvidia.com/)"
+  warn "  Then re-run this script."
+  # Try unauthenticated in case it works
+  run helm repo add nvaie https://helm.ngc.nvidia.com/nvaie --force-update 2>/dev/null || true
+fi
+
 run helm repo add nats https://nats-io.github.io/k8s/helm/charts/ --force-update 2>/dev/null || true
 run helm repo add bitnami https://charts.bitnami.com/bitnami --force-update 2>/dev/null || true
 run helm repo update
 
-# ── Step 4: Install NATS (required for KV-aware routing) ─────────────
+# ── Step 5: Install NATS (required for KV-aware routing) ─────────────
 info "Installing NATS with JetStream..."
 if helm status nats -n "$NAMESPACE" &>/dev/null; then
   info "NATS already installed, upgrading..."
@@ -160,9 +224,9 @@ fi
 run helm upgrade --install nats nats/nats \
   -n "$NAMESPACE" \
   -f "${SCRIPT_DIR}/helm-values/nats.yaml" \
-  --wait --timeout 5m
+  --wait --timeout 10m || warn "NATS install did not become ready in time. Continuing — it may still be starting."
 
-# ── Step 5: Install PostgreSQL (Dynamo API store backend) ─────────────
+# ── Step 6: Install PostgreSQL (Dynamo API store backend) ─────────────
 info "Installing PostgreSQL..."
 if helm status dynamo-postgresql -n "$NAMESPACE" &>/dev/null; then
   info "PostgreSQL already installed, upgrading..."
@@ -170,9 +234,9 @@ fi
 run helm upgrade --install dynamo-postgresql bitnami/postgresql \
   -n "$NAMESPACE" \
   -f "${SCRIPT_DIR}/helm-values/postgresql.yaml" \
-  --wait --timeout 5m
+  --wait --timeout 10m || warn "PostgreSQL install failed. Check: kubectl get pods -n ${NAMESPACE}"
 
-# ── Step 6: Install MinIO (artifact storage) ─────────────────────────
+# ── Step 7: Install MinIO (artifact storage) ─────────────────────────
 info "Installing MinIO..."
 if helm status dynamo-minio -n "$NAMESPACE" &>/dev/null; then
   info "MinIO already installed, upgrading..."
@@ -180,17 +244,10 @@ fi
 run helm upgrade --install dynamo-minio bitnami/minio \
   -n "$NAMESPACE" \
   -f "${SCRIPT_DIR}/helm-values/minio.yaml" \
-  --wait --timeout 5m
+  --wait --timeout 10m || warn "MinIO install failed. Check: kubectl get pods -n ${NAMESPACE}"
 
-# ── Step 7: Install NVIDIA Dynamo Operator ────────────────────────────
+# ── Step 8: Install NVIDIA Dynamo Operator ────────────────────────────
 info "Installing NVIDIA Dynamo Operator v${DYNAMO_OPERATOR_VERSION}..."
-
-# Check if NGC API key is set for pulling operator images
-if [[ -z "${NGC_API_KEY:-}" ]]; then
-  warn "NGC_API_KEY not set. If the operator image pull fails, set it with:"
-  warn "  export NGC_API_KEY=<your-key>"
-  warn "  Then re-run this script."
-fi
 
 # Create image pull secret if NGC key is available
 if [[ -n "${NGC_API_KEY:-}" ]]; then
@@ -203,13 +260,35 @@ if [[ -n "${NGC_API_KEY:-}" ]]; then
     --dry-run=client -o yaml | run kubectl apply -f -
 fi
 
-run helm upgrade --install dynamo-operator nvaie/dynamo-operator \
-  -n "$NAMESPACE" \
-  -f "${SCRIPT_DIR}/helm-values/dynamo-operator.yaml" \
-  --version "${DYNAMO_OPERATOR_VERSION}" \
-  --wait --timeout 10m
+# Verify the repo is available before installing
+if ! helm search repo nvaie/dynamo-operator --version "${DYNAMO_OPERATOR_VERSION}" &>/dev/null; then
+  warn "Dynamo Operator chart not found in nvaie repo."
+  warn "This usually means NGC_API_KEY is missing or invalid."
+  warn "Checking if CRDs are already installed from a previous deployment..."
+  if kubectl get crd dynamographdeploymentrequests.nvidia.com &>/dev/null; then
+    info "Dynamo CRDs already registered — operator was previously installed."
+    info "Skipping operator Helm install."
+  else
+    error "Dynamo Operator chart not found and CRDs not present.
+  Set NGC_API_KEY and re-run:
+    export NGC_API_KEY=<your-key>
+    ./install.sh"
+  fi
+else
+  run helm upgrade --install dynamo-operator nvaie/dynamo-operator \
+    -n "$NAMESPACE" \
+    -f "${SCRIPT_DIR}/helm-values/dynamo-operator.yaml" \
+    --version "${DYNAMO_OPERATOR_VERSION}" \
+    --wait --timeout 10m || warn "Dynamo Operator install did not complete. Check: kubectl get pods -n ${NAMESPACE}"
+fi
 
-# ── Step 8: Apply Karpenter NodePool for inference GPUs ───────────────
+# Restore Docker config if we patched it
+if [[ "${DOCKER_CONFIG_PATCHED:-}" == "true" && -f "${DOCKER_CONFIG}.bak" ]]; then
+  mv "${DOCKER_CONFIG}.bak" "$DOCKER_CONFIG"
+  info "Restored original Docker config."
+fi
+
+# ── Step 9: Apply Karpenter NodePool for inference GPUs ───────────────
 if [[ "$SKIP_KARPENTER_NODEPOOL" == "false" ]]; then
   info "Checking Karpenter availability..."
 
@@ -273,7 +352,7 @@ else
   info "Skipping Karpenter NodePool creation (--skip-karpenter)."
 fi
 
-# ── Step 9: Verify installation ──────────────────────────────────────
+# ── Step 10: Verify installation ─────────────────────────────────────
 info "Verifying installation..."
 
 echo ""
@@ -290,7 +369,7 @@ echo ""
 echo "=== Karpenter NodePool ==="
 kubectl get nodepool dynamo-inference 2>/dev/null || echo "  (not configured)"
 
-# ── Step 10: Generate environment file ────────────────────────────────
+# ── Step 11: Generate environment file ────────────────────────────────
 ENV_FILE="${SCRIPT_DIR}/dynamo-env.sh"
 if [[ "$DRY_RUN" == "true" ]]; then
   info "[DRY-RUN] Would generate environment file: ${ENV_FILE}"
