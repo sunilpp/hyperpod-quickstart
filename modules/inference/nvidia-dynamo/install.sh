@@ -84,8 +84,29 @@ run() {
 # ── Step 1: Validate prerequisites ────────────────────────────────────
 info "Validating prerequisites..."
 
-for cmd in kubectl helm aws; do
-  command -v "$cmd" &>/dev/null || error "'$cmd' is required but not found in PATH"
+declare -A INSTALL_HINTS=(
+  [kubectl]="https://docs.aws.amazon.com/eks/latest/userguide/install-kubectl.html
+    macOS:  brew install kubectl
+    Linux:  curl -LO https://dl.k8s.io/release/\$(curl -Ls https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl && chmod +x kubectl && sudo mv kubectl /usr/local/bin/"
+  [helm]="https://helm.sh/docs/intro/install/
+    macOS:  brew install helm
+    Linux:  curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash"
+  [aws]="https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
+    macOS:  brew install awscli
+    Linux:  curl https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip -o awscliv2.zip && unzip awscliv2.zip && sudo ./aws/install"
+  [envsubst]="Part of the 'gettext' package
+    macOS:  brew install gettext
+    Linux:  sudo apt-get install gettext   OR   sudo yum install gettext"
+)
+
+for cmd in kubectl helm aws envsubst; do
+  if ! command -v "$cmd" &>/dev/null; then
+    echo ""
+    error "'$cmd' is required but not found in PATH.
+
+  Install it:
+    ${INSTALL_HINTS[$cmd]}"
+  fi
 done
 
 # Verify helm version >= 3.12
